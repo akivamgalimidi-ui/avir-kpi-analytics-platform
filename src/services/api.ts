@@ -19,6 +19,7 @@ export async function apiRequest(path: string, options?: RequestInit) {
 }
 
 export const api = {
+  ping: () => apiRequest("/api/ping"),
   health: () => apiRequest("/api/health"),
   filters: () => apiRequest("/api/filters"),
   uploadPayroll: (file: File) => {
