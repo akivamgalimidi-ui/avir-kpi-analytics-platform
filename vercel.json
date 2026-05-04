@@ -2,7 +2,6 @@
   "version": 2,
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index.py" },
-    { "source": "/((?!assets/|vite.svg|favicon.ico).*)", "destination": "/index.html" }
+    { "source": "/((?!api/|assets/|vite.svg|favicon.ico).*)", "destination": "/index.html" }
   ]
 }
-
