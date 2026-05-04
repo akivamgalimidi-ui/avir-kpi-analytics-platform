@@ -19,15 +19,17 @@ export async function apiRequest(path: string, options?: RequestInit) {
 }
 
 export const api = {
-  ping: () => apiRequest("/api/ping"),
   health: () => apiRequest("/api/health"),
   filters: () => apiRequest("/api/filters"),
   uploadPayroll: (file: File) => {
-    const formData = new FormData();
-    formData.append("file", file);
+    // Send as raw binary body instead of FormData for maximum stability
     return apiRequest("/api/upload", {
       method: "POST",
-      body: formData,
+      headers: {
+        "Content-Type": file.type || "application/octet-stream",
+        "x-filename": encodeURIComponent(file.name),
+      },
+      body: file,
     });
   },
   dashboardExecutive: () => apiRequest("/api/dashboard/executive"),
