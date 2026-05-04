@@ -1,8 +1,4 @@
-fastapi==0.103.2
-uvicorn==0.23.2
-pydantic<2.0.0
+fastapi==0.95.0
+pydantic==1.10.7
 python-multipart==0.0.6
-openpyxl==3.1.2
-xlsxwriter==3.1.9
-supabase
-python-dateutil
+uvicorn==0.21.1
