@@ -22,7 +22,7 @@ export const api = {
   health: () => apiRequest("/api/health"),
   filters: () => apiRequest("/api/filters"),
   uploadPayroll: (file: File) => {
-    // Send as raw binary body instead of FormData for maximum stability
+    // Step 8: Send as raw binary body as requested
     return apiRequest("/api/upload", {
       method: "POST",
       headers: {
@@ -32,6 +32,4 @@ export const api = {
       body: file,
     });
   },
-  dashboardExecutive: () => apiRequest("/api/dashboard/executive"),
-  exportFullWorkbook: () => apiRequest("/api/export/full-workbook", { method: "POST" }),
 };
