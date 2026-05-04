@@ -1,12 +1,18 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import * as XLSX from "xlsx";
-import { parseDimensions } from "./parser/dimensions.js";
-import { parseMetrics } from "./parser/metrics.js";
-import { supabaseAdmin, getOrCreateOrg } from "./supabaseAdmin.js";
+import { createClient } from '@supabase/supabase-js';
 
 export const config = {
   api: { bodyParser: false },
 };
+
+// Defensive Supabase Initialization
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
+
+const supabase = (supabaseUrl && supabaseKey) 
+  ? createClient(supabaseUrl, supabaseKey) 
+  : null;
 
 function readRawBody(req: VercelRequest): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -18,73 +24,89 @@ function readRawBody(req: VercelRequest): Promise<Buffer> {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  console.log("Analytical Engine invoked at", new Date().toISOString());
+
   try {
     if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
 
     const filename = decodeURIComponent(req.headers["x-filename"] as string || "uploaded-payroll.xlsx");
     const buffer = await readRawBody(req);
     
-    // 1. High-Performance Workbook Load
-    const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true });
+    // 1. Workbook Load
+    const workbook = XLSX.read(buffer, { type: "buffer" });
 
-    // 2. Deep Analytical Parsing
-    const dims = parseDimensions(workbook);
-    const metrics = parseMetrics(workbook);
+    // 2. Dimension Parsing (Integrated)
+    const facilities = new Set<string>();
+    const regions = new Set<string>();
+    const groups = new Set<string>();
 
-    // 3. Database Persistence
-    let dbStatus = "Skipped (No Config)";
-    let batchId = null;
+    ["Analysis by Region", "Analysis by Acq Group"].forEach(sheetName => {
+      const sheet = workbook.Sheets[sheetName];
+      if (!sheet) return;
+      const data = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+      for (let i = 5; i < data.length; i++) {
+        const row = data[i];
+        if (!row || !row[0]) continue;
+        const fName = String(row[0]);
+        if (fName.includes('Total')) continue;
+        facilities.add(fName);
+        if (sheetName.includes('Region') && row[1]) regions.add(String(row[1]));
+        if (sheetName.includes('Acq') && row[1]) groups.add(String(row[1]));
+      }
+    });
 
-    if (process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    // 3. Metric Parsing (Integrated)
+    let metricCount = 0;
+    ["OT by Pay Period", "Bonus by PPE", "PPDs"].forEach(sheetName => {
+       const sheet = workbook.Sheets[sheetName];
+       if (!sheet) return;
+       const data = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
+       metricCount += Math.max(0, (data.length - 1) * ((data[0]?.length || 1) - 1));
+    });
+
+    // 4. Defensive Database Logic
+    let dbStatus = "Database Persistence Disabled (Check Env Vars)";
+    if (supabase) {
       try {
-        const orgId = await getOrCreateOrg();
-        
-        // Create Master Upload Batch
-        const { data: batch } = await supabaseAdmin.from('upload_batches').insert({
-          organization_id: orgId,
-          filename: filename,
-          status: 'complete',
-          rows_parsed: metrics.length
-        }).select('id').single();
-        
-        batchId = batch?.id;
+        // Attempt Org Lookup
+        const { data: org } = await supabase.from('organizations').select('id').limit(1).single();
+        const orgId = org?.id;
 
-        // Atomic Upsert of Dimensions
-        await Promise.all([
-          supabaseAdmin.from('regions').upsert(dims.regions.map(n => ({ organization_id: orgId, region_name: n })), { onConflict: 'organization_id,region_name' }),
-          supabaseAdmin.from('acquisition_groups').upsert(dims.groups.map(n => ({ organization_id: orgId, acquisition_group_name: n })), { onConflict: 'organization_id,acquisition_group_name' })
-        ]);
-
-        dbStatus = "Successfully Persisted to Database";
+        if (orgId) {
+          await supabase.from('upload_batches').insert({
+            organization_id: orgId,
+            filename,
+            status: 'complete',
+            rows_parsed: metricCount
+          });
+          dbStatus = "Analytical Batch Persisted to Supabase";
+        }
       } catch (dbErr: any) {
-        dbStatus = "Partial Success: Meta-data parsed, but DB save failed: " + dbErr.message;
+        dbStatus = "Analytical data parsed, but DB save failed: " + dbErr.message;
       }
     }
 
     return res.status(200).json({
       ok: true,
-      message: "Analytical Ingestion Complete",
+      message: "Analytical Engine Success",
       filename,
-      fileSize: buffer.length,
       workbookParsed: true,
       sheetsDetected: workbook.SheetNames,
       databaseStatus: dbStatus,
       summary: {
-        facilities: dims.facilities.length,
-        regions: dims.regions.length,
-        groups: dims.groups.length,
-        metrics: metrics.length
-      },
-      parsedData: {
-        dimensions: dims,
-        preview: metrics.slice(0, 10)
+        facilities: facilities.size,
+        regions: regions.size,
+        groups: groups.size,
+        metrics: metricCount
       },
       timestamp: new Date().toISOString()
     });
+
   } catch (err: any) {
+    console.error("Analytical Engine Crash:", err);
     return res.status(500).json({
       ok: false,
-      error: "Analytical Engine Error",
+      error: "Analytical Engine Failure",
       details: err.message,
       timestamp: new Date().toISOString()
     });
