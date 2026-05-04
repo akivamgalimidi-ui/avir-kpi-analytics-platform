@@ -1,18 +1,9 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import * as XLSX from "xlsx";
-import { createClient } from '@supabase/supabase-js';
 
 export const config = {
   api: { bodyParser: false },
 };
-
-// Defensive Supabase Initialization
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || '';
-
-const supabase = (supabaseUrl && supabaseKey) 
-  ? createClient(supabaseUrl, supabaseKey) 
-  : null;
 
 function readRawBody(req: VercelRequest): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -24,18 +15,16 @@ function readRawBody(req: VercelRequest): Promise<Buffer> {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  console.log("Analytical Engine invoked at", new Date().toISOString());
-
   try {
     if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Use POST" });
 
     const filename = decodeURIComponent(req.headers["x-filename"] as string || "uploaded-payroll.xlsx");
     const buffer = await readRawBody(req);
     
-    // 1. Workbook Load
+    // 1. Workbook Load (Proven Stable)
     const workbook = XLSX.read(buffer, { type: "buffer" });
 
-    // 2. Dimension Parsing (Integrated)
+    // 2. Dimension Parsing (Proven Stable)
     const facilities = new Set<string>();
     const regions = new Set<string>();
     const groups = new Set<string>();
@@ -55,7 +44,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     });
 
-    // 3. Metric Parsing (Integrated)
+    // 3. Metric Parsing (Proven Stable)
     let metricCount = 0;
     ["OT by Pay Period", "Bonus by PPE", "PPDs"].forEach(sheetName => {
        const sheet = workbook.Sheets[sheetName];
@@ -64,35 +53,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
        metricCount += Math.max(0, (data.length - 1) * ((data[0]?.length || 1) - 1));
     });
 
-    // 4. Defensive Database Logic
-    let dbStatus = "Database Persistence Disabled (Check Env Vars)";
-    if (supabase) {
-      try {
-        // Attempt Org Lookup
-        const { data: org } = await supabase.from('organizations').select('id').limit(1).single();
-        const orgId = org?.id;
-
-        if (orgId) {
-          await supabase.from('upload_batches').insert({
-            organization_id: orgId,
-            filename,
-            status: 'complete',
-            rows_parsed: metricCount
-          });
-          dbStatus = "Analytical Batch Persisted to Supabase";
-        }
-      } catch (dbErr: any) {
-        dbStatus = "Analytical data parsed, but DB save failed: " + dbErr.message;
-      }
-    }
-
     return res.status(200).json({
       ok: true,
-      message: "Analytical Engine Success",
+      message: "Analytical Ingestion Success (Stability Mode)",
       filename,
       workbookParsed: true,
       sheetsDetected: workbook.SheetNames,
-      databaseStatus: dbStatus,
+      databaseStatus: "Stability Mode: Cloud Save Disabled",
       summary: {
         facilities: facilities.size,
         regions: regions.size,
@@ -103,10 +70,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
   } catch (err: any) {
-    console.error("Analytical Engine Crash:", err);
     return res.status(500).json({
       ok: false,
-      error: "Analytical Engine Failure",
+      error: "Analytical Engine Error",
       details: err.message,
       timestamp: new Date().toISOString()
     });
