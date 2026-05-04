@@ -17,7 +17,9 @@ import {
   FileText,
   Search,
   Filter,
-  CheckCircle2
+  CheckCircle2,
+  Database,
+  History
 } from 'lucide-react';
 
 const TABS = [
@@ -41,24 +43,31 @@ const TABS = [
 
 function App() {
   const [activeTab, setActiveTab] = useState('executive');
-  const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [uploadResult, setUploadResult] = useState<any>(null);
+  const [filters, setFilters] = useState<any>(null);
   const [systemStatus, setSystemStatus] = useState<any>({ api: 'checking...', db: 'checking...', frontend: 'PASS', css: 'PASS' });
 
   useEffect(() => {
-    checkHealth();
+    refreshData();
   }, []);
 
-  const checkHealth = async () => {
+  const refreshData = async () => {
     try {
-      const result = await api.health();
+      const [health, filterData] = await Promise.all([
+        api.health(),
+        api.filters()
+      ]);
+      
       setSystemStatus((prev: any) => ({ 
         ...prev, 
         api: 'PASS', 
-        db: result.supabaseUrlConfigured ? 'PASS' : 'WARNING',
+        db: health.supabaseUrlConfigured ? 'PASS' : 'WARNING',
         error: null
       }));
+      
+      setFilters(filterData);
     } catch (err: any) {
       setSystemStatus((prev: any) => ({ ...prev, api: 'FAIL', db: 'FAIL', error: err.message }));
     }
@@ -72,8 +81,9 @@ function App() {
     try {
       const file = e.target.files[0];
       const result = await api.uploadPayroll(file);
-      setData(result.dashboard_data);
-      setActiveTab('executive');
+      setUploadResult(result);
+      await refreshData(); // Immediately refresh dimensions from the DB
+      setActiveTab('data-quality');
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -91,7 +101,7 @@ function App() {
                 <Activity size={18} className="text-blue-500" />
                 System Health Status
               </h3>
-              <button onClick={checkHealth} className="text-sm text-blue-600 font-semibold hover:underline">Refresh</button>
+              <button onClick={refreshData} className="text-sm text-blue-600 font-semibold hover:underline">Refresh</button>
             </div>
             <div className="p-8">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -138,13 +148,70 @@ function App() {
       return (
         <div className="p-12 flex flex-col items-center justify-center text-center h-[70vh]">
           <div className="w-16 h-16 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin"></div>
-          <h3 className="text-2xl font-bold text-slate-800 mt-8 mb-2">Uploading Payroll</h3>
-          <p className="text-slate-500 max-w-sm">Verifying API connectivity and upload stability...</p>
+          <h3 className="text-2xl font-bold text-slate-800 mt-8 mb-2">Parsing Workbook</h3>
+          <p className="text-slate-500 max-w-sm">Normalizing Excel sheets and persisting to Supabase...</p>
         </div>
       );
     }
 
-    if (!data) {
+    if (activeTab === 'data-quality' && uploadResult) {
+      return (
+        <div className="p-8 max-w-5xl mx-auto space-y-6">
+           <div className="bg-emerald-50 border border-emerald-100 p-6 rounded-2xl flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="bg-emerald-500 text-white p-2 rounded-lg"><CheckCircle2 size={24} /></div>
+                <div>
+                  <h3 className="font-black text-emerald-900">Upload Processed Successfully</h3>
+                  <p className="text-sm text-emerald-700">Batch ID: {uploadResult.uploadBatchId}</p>
+                </div>
+              </div>
+              <div className="text-right">
+                <div className="text-xs font-bold text-emerald-600 uppercase tracking-widest">Database Status</div>
+                <div className="font-black text-emerald-900">{uploadResult.databaseStatus}</div>
+              </div>
+           </div>
+
+           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Sheets Detected</div>
+                <div className="text-3xl font-black text-slate-900">{uploadResult.sheetsDetected?.length || 0}</div>
+              </div>
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Facilities Found</div>
+                <div className="text-3xl font-black text-slate-900">{uploadResult.facilitiesDetected?.length || 0}</div>
+              </div>
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Parser Status</div>
+                <div className="text-sm font-black text-blue-600">{uploadResult.parserStatus}</div>
+              </div>
+           </div>
+
+           <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700">Workbook Structure</div>
+              <div className="p-0">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50/50 text-slate-500 text-left">
+                    <tr>
+                      <th className="px-6 py-3 font-black uppercase text-[10px] tracking-widest">Sheet Name</th>
+                      <th className="px-6 py-3 font-black uppercase text-[10px] tracking-widest text-right">Row Count</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {Object.entries(uploadResult.sheetRowCounts || {}).map(([name, count]: [any, any]) => (
+                      <tr key={name} className="hover:bg-slate-50/50 transition">
+                        <td className="px-6 py-4 font-bold text-slate-700">{name}</td>
+                        <td className="px-6 py-4 text-right font-mono text-slate-500">{count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+           </div>
+        </div>
+      );
+    }
+
+    if (!filters?.uploadBatches?.length && !uploadResult) {
       return (
         <div className="p-20 flex flex-col items-center justify-center text-center opacity-60">
           <div className="w-20 h-20 bg-slate-200 rounded-full flex items-center justify-center mb-6">
@@ -163,8 +230,18 @@ function App() {
     return (
       <div className="p-8">
         <div className="bg-white p-12 rounded-2xl border border-slate-200 text-center">
-           <h3 className="text-xl font-bold text-slate-800 mb-2">{TABS.find(t => t.id === activeTab)?.name} Ready</h3>
-           <p className="text-slate-500">Foundation is stable. Visualization modules will be connected to the parser engine next.</p>
+           <h3 className="text-xl font-bold text-slate-800 mb-2">{TABS.find(t => t.id === activeTab)?.name}</h3>
+           <div className="flex items-center justify-center gap-8 mt-8">
+              <div className="text-center">
+                <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Active Batch</div>
+                <div className="font-bold text-slate-700">{filters?.uploadBatches?.[0]?.filename || "Local Session"}</div>
+              </div>
+              <div className="text-center border-l border-slate-100 pl-8">
+                <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Facilities</div>
+                <div className="font-bold text-slate-700">{filters?.facilities?.length || 0}</div>
+              </div>
+           </div>
+           <p className="text-slate-500 mt-12 max-w-md mx-auto">Workbook data is stored in Supabase. Dashboard modules are querying real dimensions from the database.</p>
         </div>
       </div>
     );
@@ -205,10 +282,13 @@ function App() {
 
       <main className="flex-1 flex flex-col overflow-hidden relative">
         <header className="h-20 bg-white border-b border-slate-200 px-10 flex items-center justify-between shrink-0 z-10">
-          <h2 className="text-xl font-black text-slate-800 tracking-tight">{TABS.find(t => t.id === activeTab)?.name}</h2>
+          <div className="flex flex-col">
+            <h2 className="text-xl font-black text-slate-800 tracking-tight">{TABS.find(t => t.id === activeTab)?.name}</h2>
+            {filters?.facilities?.length > 0 && <span className="text-[10px] text-emerald-600 font-black uppercase tracking-widest flex items-center gap-1"><Database size={10}/> Data Loaded from Supabase</span>}
+          </div>
           <div className="flex gap-4">
-             <div className="hidden md:flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold text-slate-600">
-                <Filter size={14} /> Global Filters
+             <div className="hidden md:flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold text-slate-600 cursor-pointer hover:bg-slate-100 transition">
+                <Filter size={14} /> Global Filters ({filters?.facilities?.length || 0})
              </div>
              <label className={`px-6 py-2.5 rounded-xl text-sm font-black transition-all shadow-lg shadow-blue-900/10 flex items-center gap-2 cursor-pointer ${
                loading ? 'bg-slate-100 text-slate-400' : 'bg-blue-600 hover:bg-blue-700 text-white'
