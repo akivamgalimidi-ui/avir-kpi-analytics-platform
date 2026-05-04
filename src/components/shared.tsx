@@ -1,77 +1,87 @@
-// Shared helpers used across all tab components
-import type { ParsedMetric } from '../utils/parseWorkbook';
+import React from 'react';
 
+// ── Formatting helpers ────────────────────────────────────────────────────────
 export const fmt$ = (n: number) =>
-  n === 0 ? '—' : '$' + n.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  n === 0 ? '—' : '$' + n.toLocaleString('en-US', { maximumFractionDigits: 0 });
+
+export const fmtN = (n: number) => n.toLocaleString('en-US');
 
 export const fmt2 = (n: number) =>
   n === 0 ? '—' : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-export const fmtN = (n: number) =>
-  n === 0 ? '—' : n.toLocaleString('en-US');
-
-export function sumField<K extends keyof ParsedMetric>(rows: ParsedMetric[], field: K): number {
-  return rows.reduce((s, r) => s + (Number(r[field]) || 0), 0);
+export function sumNum<T>(arr: T[], key: keyof T): number {
+  return arr.reduce((s, r) => s + (Number(r[key]) || 0), 0);
 }
 
-export function groupBy<T>(arr: T[], key: (item: T) => string): Record<string, T[]> {
-  return arr.reduce((acc, item) => {
-    const k = key(item);
-    (acc[k] = acc[k] || []).push(item);
+export function groupBy<T>(arr: T[], fn: (r: T) => string): Record<string, T[]> {
+  return arr.reduce((acc, r) => {
+    const k = fn(r) || 'Unknown';
+    (acc[k] = acc[k] || []).push(r);
     return acc;
   }, {} as Record<string, T[]>);
 }
 
-interface StatCardProps {
-  label: string;
-  value: string;
-  sub?: string;
-  accent?: string;
-}
-
-export function StatCard({ label, value, sub, accent = 'bg-blue-50 text-blue-700' }: StatCardProps) {
+// ── StatCard ──────────────────────────────────────────────────────────────────
+export function StatCard({ label, value, sub, color = 'blue' }: {
+  label: string; value: string | number; sub?: string; color?: string;
+}) {
+  const colors: Record<string, string> = {
+    blue: 'bg-blue-50 text-blue-700 border-blue-100',
+    red: 'bg-red-50 text-red-700 border-red-100',
+    amber: 'bg-amber-50 text-amber-700 border-amber-100',
+    emerald: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+    purple: 'bg-purple-50 text-purple-700 border-purple-100',
+    indigo: 'bg-indigo-50 text-indigo-700 border-indigo-100',
+    teal: 'bg-teal-50 text-teal-700 border-teal-100',
+  };
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition">
-      <div className={`text-[9px] font-black uppercase tracking-widest mb-3 inline-flex px-2 py-0.5 rounded-lg ${accent}`}>{label}</div>
-      <div className="text-2xl font-black text-slate-900 tracking-tight">{value}</div>
-      {sub && <div className="text-[10px] text-slate-400 font-bold mt-1">{sub}</div>}
+    <div className={`rounded-2xl border p-5 shadow-sm hover:shadow-md transition ${colors[color] || colors.blue}`}>
+      <div className="text-[9px] font-black uppercase tracking-widest opacity-70 mb-2">{label}</div>
+      <div className="text-2xl font-black tracking-tight">{value}</div>
+      {sub && <div className="text-[10px] font-medium opacity-60 mt-1">{sub}</div>}
     </div>
   );
 }
 
-interface EmptyStateProps { message: string }
-export function EmptyState({ message }: EmptyStateProps) {
+// ── SectionCard ───────────────────────────────────────────────────────────────
+export function SectionCard({ title, children, action }: {
+  title: string; children: React.ReactNode; action?: React.ReactNode;
+}) {
   return (
-    <div className="flex flex-col items-center justify-center h-48 text-slate-400">
-      <div className="text-4xl mb-3">📊</div>
-      <div className="text-sm font-bold">{message}</div>
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between">
+        <span className="text-[10px] font-black uppercase tracking-widest text-slate-600">{title}</span>
+        {action}
+      </div>
+      {children}
     </div>
   );
 }
 
-interface TableProps {
+// ── DataTable ─────────────────────────────────────────────────────────────────
+export function DataTable({ headers, rows, onRowClick }: {
   headers: string[];
-  rows: (string | number | React.ReactNode)[][];
-  onRowClick?: (idx: number) => void;
-}
-export function DataTable({ headers, rows, onRowClick }: TableProps) {
+  rows: React.ReactNode[][];
+  onRowClick?: (i: number) => void;
+}) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-sm text-left">
-        <thead className="bg-slate-50 border-b border-slate-200">
+      <table className="w-full text-xs text-left">
+        <thead className="bg-slate-50 border-b border-slate-100">
           <tr>
             {headers.map(h => (
-              <th key={h} className="px-5 py-3 text-[10px] font-black uppercase tracking-widest text-slate-500">{h}</th>
+              <th key={h} className="px-4 py-2.5 text-[9px] font-black uppercase tracking-widest text-slate-500 whitespace-nowrap">{h}</th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-100">
+        <tbody className="divide-y divide-slate-50">
           {rows.length === 0 ? (
-            <tr><td colSpan={headers.length} className="text-center py-10 text-slate-400 text-xs font-bold">No data to display</td></tr>
+            <tr><td colSpan={headers.length} className="text-center py-10 text-slate-400 font-bold">No data</td></tr>
           ) : rows.map((row, i) => (
-            <tr key={i} onClick={() => onRowClick?.(i)} className={`hover:bg-slate-50/80 transition ${onRowClick ? 'cursor-pointer' : ''}`}>
+            <tr key={i} onClick={() => onRowClick?.(i)}
+              className={`hover:bg-slate-50/80 transition ${onRowClick ? 'cursor-pointer' : ''}`}>
               {row.map((cell, j) => (
-                <td key={j} className="px-5 py-3 text-slate-700 font-medium">{cell}</td>
+                <td key={j} className="px-4 py-2.5 text-slate-700 font-medium">{cell}</td>
               ))}
             </tr>
           ))}
@@ -81,11 +91,23 @@ export function DataTable({ headers, rows, onRowClick }: TableProps) {
   );
 }
 
-export function SectionCard({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-      <div className="px-6 py-4 border-b border-slate-100 font-black text-slate-800 uppercase tracking-tight text-xs">{title}</div>
-      {children}
-    </div>
-  );
+// ── Badge ─────────────────────────────────────────────────────────────────────
+export function Badge({ label, color }: { label: string; color: 'red' | 'amber' | 'emerald' | 'blue' | 'slate' }) {
+  const map = {
+    red: 'bg-red-100 text-red-800',
+    amber: 'bg-amber-100 text-amber-800',
+    emerald: 'bg-emerald-100 text-emerald-800',
+    blue: 'bg-blue-100 text-blue-800',
+    slate: 'bg-slate-100 text-slate-600',
+  };
+  return <span className={`px-2 py-0.5 rounded-lg text-[9px] font-black ${map[color]}`}>{label}</span>;
+}
+
+// ── Risk helper ───────────────────────────────────────────────────────────────
+export function riskBadge(score: number, max: number): React.ReactNode {
+  const pct = max > 0 ? score / max : 0;
+  if (pct >= 0.75) return <Badge label="Critical" color="red" />;
+  if (pct >= 0.5) return <Badge label="High" color="amber" />;
+  if (pct >= 0.25) return <Badge label="Medium" color="blue" />;
+  return <Badge label="Low" color="emerald" />;
 }

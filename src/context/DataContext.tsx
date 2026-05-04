@@ -1,122 +1,108 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
-import type { WorkbookParseResult, ParsedFacility, ParsedMetric, ParsedEmployee } from '../utils/parseWorkbook';
+import React, { createContext, useContext, useState, useEffect, useMemo } from 'react';
+import type { ParsedData, OTRow, BonusRow, PPDRow } from '../utils/parseWorkbook';
 
-export interface SelectedFilters {
-  facility: string | null;
+export interface Filters {
+  subgroup: string | null;
   region: string | null;
-  group: string | null;
+  facility: string | null;
+  department: string | null;
+  position: string | null;
   payPeriod: string | null;
-}
-
-export interface DataState {
-  uploadBatchId: string | null;
-  filename: string | null;
-  fileSize: number | null;
-  parsedAt: string | null;
-  sheetsDetected: string[];
-  sheetRowCounts: Record<string, number>;
-  facilities: ParsedFacility[];
-  regions: string[];
-  groups: string[];
-  payPeriods: string[];
-  metrics: ParsedMetric[];
-  employees: ParsedEmployee[];
-  warnings: string[];
-  filters: SelectedFilters;
+  payCycle: string | null;
 }
 
 interface DataContextType {
-  data: DataState;
-  setFromParseResult: (result: WorkbookParseResult) => void;
+  data: ParsedData | null;
+  filters: Filters;
+  setFromParseResult: (r: ParsedData) => void;
   resetData: () => void;
-  updateFilters: (f: Partial<SelectedFilters>) => void;
-  filteredMetrics: ParsedMetric[];
+  updateFilter: (key: keyof Filters, val: string | null) => void;
+  clearFilters: () => void;
+  filteredOT: OTRow[];
+  filteredBonus: BonusRow[];
+  filteredPPD: PPDRow[];
 }
 
-const DEFAULT_STATE: DataState = {
-  uploadBatchId: null,
-  filename: null,
-  fileSize: null,
-  parsedAt: null,
-  sheetsDetected: [],
-  sheetRowCounts: {},
-  facilities: [],
-  regions: [],
-  groups: [],
-  payPeriods: [],
-  metrics: [],
-  employees: [],
-  warnings: [],
-  filters: { facility: null, region: null, group: null, payPeriod: null }
+const DEFAULT_FILTERS: Filters = {
+  subgroup: null, region: null, facility: null,
+  department: null, position: null, payPeriod: null, payCycle: null
 };
 
 const DataContext = createContext<DataContextType | undefined>(undefined);
-
-const STORAGE_KEY = 'avir_analytics_v2';
+const STORAGE_KEY = 'avir_v3';
 
 export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [data, setInternalData] = useState<DataState>(DEFAULT_STATE);
+  const [data, setData] = useState<ParsedData | null>(null);
+  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
 
+  // Restore from localStorage
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // Only restore if we have real data
-        if (parsed.facilities?.length > 0 || parsed.metrics?.length > 0) {
-          setInternalData(parsed);
-        }
+      const s = localStorage.getItem(STORAGE_KEY);
+      if (s) {
+        const d = JSON.parse(s);
+        if (d?.facilities?.length > 0) setData(d);
       }
-    } catch (e) { /* ignore corrupt storage */ }
+    } catch { /* ignore */ }
   }, []);
 
-  const setFromParseResult = (result: WorkbookParseResult) => {
-    const newState: DataState = {
-      ...DEFAULT_STATE,
-      uploadBatchId: `batch_${Date.now()}`,
-      filename: result.filename,
-      fileSize: result.fileSize,
-      parsedAt: result.parsedAt,
-      sheetsDetected: result.sheetsDetected,
-      sheetRowCounts: result.sheetRowCounts,
-      facilities: result.facilities,
-      regions: result.regions,
-      groups: result.groups,
-      payPeriods: result.payPeriods,
-      metrics: result.metrics,
-      employees: result.employees,
-      warnings: result.warnings,
-      filters: DEFAULT_STATE.filters
-    };
-    setInternalData(newState);
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newState));
-    } catch (e) { /* storage full */ }
+  const setFromParseResult = (r: ParsedData) => {
+    setData(r);
+    setFilters(DEFAULT_FILTERS);
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(r)); } catch { /* storage full */ }
   };
 
-  const resetData = () => {
-    setInternalData(DEFAULT_STATE);
-    localStorage.removeItem(STORAGE_KEY);
+  const resetData = () => { setData(null); setFilters(DEFAULT_FILTERS); localStorage.removeItem(STORAGE_KEY); };
+
+  const updateFilter = (key: keyof Filters, val: string | null) => {
+    setFilters(prev => ({ ...prev, [key]: val }));
   };
 
-  const updateFilters = (f: Partial<SelectedFilters>) => {
-    setInternalData(prev => ({
-      ...prev,
-      filters: { ...prev.filters, ...f }
-    }));
-  };
+  const clearFilters = () => setFilters(DEFAULT_FILTERS);
 
-  // Derived: filtered metrics applying current filter state
-  const filteredMetrics = data.metrics.filter(m => {
-    if (data.filters.facility && m.facility !== data.filters.facility) return false;
-    if (data.filters.region && m.region !== data.filters.region) return false;
-    if (data.filters.group && m.group !== data.filters.group) return false;
-    if (data.filters.payPeriod && m.payPeriod !== data.filters.payPeriod) return false;
-    return true;
-  });
+  // Derived filtered facts
+  const facilitySet = useMemo(() => {
+    if (!data) return new Set<string>();
+    let facs = data.facilities;
+    if (filters.subgroup) facs = facs.filter(f => f.subgroup === filters.subgroup);
+    if (filters.region) facs = facs.filter(f => f.region === filters.region);
+    if (filters.payCycle) facs = facs.filter(f => f.payCycle === filters.payCycle);
+    if (filters.facility) facs = facs.filter(f => f.name === filters.facility);
+    return new Set(facs.map(f => f.name));
+  }, [data, filters]);
+
+  const filteredOT = useMemo(() => {
+    if (!data) return [];
+    return data.otRows.filter(r => {
+      if (facilitySet.size > 0 && !facilitySet.has(r.facility)) return false;
+      if (filters.department && r.department !== filters.department) return false;
+      if (filters.position && r.position !== filters.position) return false;
+      if (filters.payPeriod && r.payPeriod !== filters.payPeriod) return false;
+      return true;
+    });
+  }, [data, filters, facilitySet]);
+
+  const filteredBonus = useMemo(() => {
+    if (!data) return [];
+    return data.bonusRows.filter(r => {
+      if (facilitySet.size > 0 && !facilitySet.has(r.facility)) return false;
+      if (filters.position && r.position !== filters.position) return false;
+      if (filters.payPeriod && r.payPeriod !== filters.payPeriod) return false;
+      return true;
+    });
+  }, [data, filters, facilitySet]);
+
+  const filteredPPD = useMemo(() => {
+    if (!data) return [];
+    return data.ppdRows.filter(r => {
+      if (facilitySet.size > 0 && !facilitySet.has(r.facility)) return false;
+      if (filters.payPeriod && r.payPeriod !== filters.payPeriod) return false;
+      return true;
+    });
+  }, [data, filters, facilitySet]);
 
   return (
-    <DataContext.Provider value={{ data, setFromParseResult, resetData, updateFilters, filteredMetrics }}>
+    <DataContext.Provider value={{ data, filters, setFromParseResult, resetData, updateFilter, clearFilters, filteredOT, filteredBonus, filteredPPD }}>
       {children}
     </DataContext.Provider>
   );
@@ -124,6 +110,6 @@ export const DataProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
 export const useData = () => {
   const ctx = useContext(DataContext);
-  if (!ctx) throw new Error('useData must be used within DataProvider');
+  if (!ctx) throw new Error('useData must be inside DataProvider');
   return ctx;
 };

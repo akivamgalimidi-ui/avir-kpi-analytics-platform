@@ -1,58 +1,80 @@
 import React from 'react';
 import { useData } from '../context/DataContext';
-import { SectionCard, StatCard, DataTable, fmtN } from '../components/shared';
+import { SectionCard, DataTable, fmt$, fmtN, fmt2, sumNum, groupBy } from '../components/shared';
 
 export default function DataQuality() {
   const { data } = useData();
 
-  if (!data.filename) {
-    return (
-      <div className="p-8">
-        <SectionCard title="Data Quality Dashboard">
-          <div className="p-12 text-center text-slate-400">
-            <div className="text-4xl mb-4">📋</div>
-            <div className="font-bold">No data loaded yet. Upload a payroll file to see quality metrics.</div>
-          </div>
-        </SectionCard>
-      </div>
-    );
-  }
+  if (!data) return (
+    <div className="p-8 text-center text-slate-400 text-sm font-bold pt-24">
+      Upload a payroll file to see data quality metrics.
+    </div>
+  );
+
+  const checks = [
+    { name: 'Workbook Parsed', status: 'PASS', detail: `${data.sheetsDetected.length} sheets detected` },
+    { name: 'Facilities Detected', status: data.facilities.length > 0 ? 'PASS' : 'FAIL', detail: `${data.facilities.length} facilities from Pay Cycle Mapping` },
+    { name: 'Regions Detected', status: data.regions.length > 0 ? 'PASS' : 'WARNING', detail: `${data.regions.length} unique regions` },
+    { name: 'Subgroups (Acq Groups)', status: data.subgroups.length > 0 ? 'PASS' : 'WARNING', detail: `${data.subgroups.length}: ${data.subgroups.join(', ')}` },
+    { name: 'Pay Periods Detected', status: data.payPeriods.length > 0 ? 'PASS' : 'FAIL', detail: `${data.payPeriods.length}: ${data.payPeriods.join(', ')}` },
+    { name: 'OT Rows Parsed', status: data.otRows.length > 0 ? 'PASS' : 'FAIL', detail: `${data.otRows.length} employee-period OT records` },
+    { name: 'Bonus Rows Parsed', status: data.bonusRows.length > 0 ? 'PASS' : 'FAIL', detail: `${data.bonusRows.length} employee-period bonus records` },
+    { name: 'PPD/HPPD Rows Parsed', status: data.ppdRows.length > 0 ? 'PASS' : 'WARNING', detail: `${data.ppdRows.length} facility-period PPD/HPPD records` },
+    { name: 'Departments Detected', status: data.departments.length > 0 ? 'PASS' : 'WARNING', detail: `${data.departments.length} departments` },
+    { name: 'Positions Detected', status: data.positions.length > 0 ? 'PASS' : 'WARNING', detail: `${data.positions.length} positions` },
+    { name: 'Bonus Types Detected', status: data.bonusTypes.length > 0 ? 'PASS' : 'WARNING', detail: `${data.bonusTypes.length}: ${data.bonusTypes.slice(0, 5).join(', ')}` },
+    { name: 'Parser Warnings', status: data.warnings.length === 0 ? 'PASS' : 'WARNING', detail: `${data.warnings.length} warning(s)` },
+    { name: 'localStorage Persistence', status: 'PASS', detail: 'Data auto-saved, survives page refresh' },
+  ];
+
+  const statusColor = (s: string) => ({ PASS: 'bg-emerald-100 text-emerald-800', WARNING: 'bg-amber-100 text-amber-800', FAIL: 'bg-red-100 text-red-800' }[s] || '');
 
   return (
-    <div className="p-8 space-y-6">
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Sheets Detected" value={fmtN(data.sheetsDetected.length)} accent="bg-blue-50 text-blue-700" />
-        <StatCard label="Facilities Parsed" value={fmtN(data.facilities.length)} accent="bg-emerald-50 text-emerald-700" />
-        <StatCard label="Metric Rows" value={fmtN(data.metrics.length)} accent="bg-amber-50 text-amber-700" />
-        <StatCard label="Employees" value={fmtN(data.employees.length)} accent="bg-purple-50 text-purple-700" />
-        <StatCard label="Regions" value={fmtN(data.regions.length)} accent="bg-indigo-50 text-indigo-700" />
-        <StatCard label="Acq Groups" value={fmtN(data.groups.length)} accent="bg-pink-50 text-pink-700" />
-        <StatCard label="Pay Periods" value={fmtN(data.payPeriods.length)} accent="bg-teal-50 text-teal-700" />
-        <StatCard label="Persistence" value="localStorage" sub="Auto-saved to browser" accent="bg-slate-100 text-slate-700" />
+    <div className="p-6 space-y-6">
+      {/* Inspection Box */}
+      <div className="bg-slate-900 rounded-2xl p-6 text-emerald-400 font-mono text-xs space-y-1 shadow-xl">
+        <div className="text-slate-400 text-[9px] uppercase tracking-widest font-black mb-3">◉ Workbook Inspection Status</div>
+        <div>File: <span className="text-white">{data.filename}</span></div>
+        <div>Size: <span className="text-white">{(data.fileSize / 1024).toFixed(1)} KB</span></div>
+        <div>Parsed: <span className="text-white">{new Date(data.parsedAt).toLocaleString()}</span></div>
+        <div>Sheets: <span className="text-white">{data.sheetsDetected.join(' · ')}</span></div>
+        <div className="border-t border-slate-800 pt-2 mt-2 grid grid-cols-2 gap-x-8 gap-y-0.5">
+          <div>Facilities: <span className="text-white">{data.facilities.length}</span></div>
+          <div>Regions: <span className="text-white">{data.regions.length}</span></div>
+          <div>Acq Groups: <span className="text-white">{data.subgroups.length}</span></div>
+          <div>Pay Periods: <span className="text-white">{data.payPeriods.length}</span></div>
+          <div>OT Rows: <span className="text-white">{data.otRows.length}</span></div>
+          <div>Bonus Rows: <span className="text-white">{data.bonusRows.length}</span></div>
+          <div>PPD/HPPD Rows: <span className="text-white">{data.ppdRows.length}</span></div>
+          <div>Departments: <span className="text-white">{data.departments.length}</span></div>
+          <div>Positions: <span className="text-white">{data.positions.length}</span></div>
+          <div>Bonus Types: <span className="text-white">{data.bonusTypes.length}</span></div>
+        </div>
       </div>
 
-      {/* File Info */}
-      <SectionCard title="Upload Summary">
-        <div className="p-6 grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
-          {[
-            ['Filename', data.filename],
-            ['File Size', `${((data.fileSize || 0) / 1024).toFixed(1)} KB`],
-            ['Parsed At', data.parsedAt ? new Date(data.parsedAt).toLocaleString() : '—'],
-          ].map(([k, v]) => (
-            <div key={k} className="bg-slate-50 rounded-xl p-4 border border-slate-100">
-              <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{k}</div>
-              <div className="font-bold text-slate-800 text-xs break-all">{v}</div>
-            </div>
-          ))}
-        </div>
+      {/* QA Checks */}
+      <SectionCard title="Parser QA Checks">
+        <DataTable
+          headers={['Check', 'Status', 'Detail']}
+          rows={checks.map(c => [
+            <strong key={c.name}>{c.name}</strong>,
+            <span key={c.name} className={`px-2 py-0.5 rounded-lg text-[9px] font-black ${statusColor(c.status)}`}>{c.status}</span>,
+            <span key={c.name} className="text-slate-500">{c.detail}</span>
+          ])}
+        />
       </SectionCard>
 
-      {/* Sheet Row Counts */}
-      <SectionCard title="Sheet Breakdown">
+      {/* Sheet Breakdown */}
+      <SectionCard title="Sheet Row Counts">
         <DataTable
-          headers={['Sheet Name', 'Row Count']}
-          rows={data.sheetsDetected.map(s => [s, fmtN(data.sheetRowCounts[s] || 0)])}
+          headers={['Sheet Name', 'Rows', 'Parser Coverage']}
+          rows={data.sheetsDetected.map(s => [
+            s,
+            fmtN(data.sheetRowCounts[s] || 0),
+            data.parserCoverage[s] ? (
+              <span className="text-emerald-700 font-bold">{data.parserCoverage[s]}</span>
+            ) : <span className="text-slate-400">—</span>
+          ])}
         />
       </SectionCard>
 
@@ -62,7 +84,7 @@ export default function DataQuality() {
           <div className="p-4 space-y-2">
             {data.warnings.map((w, i) => (
               <div key={i} className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 p-3 rounded-xl border border-amber-100">
-                <span>⚠</span> {w}
+                <span className="font-black shrink-0">⚠</span> {w}
               </div>
             ))}
           </div>

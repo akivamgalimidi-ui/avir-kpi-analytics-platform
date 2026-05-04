@@ -1,49 +1,39 @@
 import React from 'react';
 import { useData } from '../context/DataContext';
-import { SectionCard, DataTable, fmt$, sumField, groupBy } from '../components/shared';
-
-function riskCategory(score: number, max: number): { label: string; color: string } {
-  const pct = max > 0 ? score / max : 0;
-  if (pct >= 0.75) return { label: 'Critical', color: 'bg-red-100 text-red-800' };
-  if (pct >= 0.5) return { label: 'High', color: 'bg-orange-100 text-orange-800' };
-  if (pct >= 0.25) return { label: 'Medium', color: 'bg-yellow-100 text-yellow-800' };
-  return { label: 'Low', color: 'bg-emerald-100 text-emerald-800' };
-}
+import { SectionCard, DataTable, fmt$, fmtN, sumNum, groupBy, riskBadge, Badge } from '../components/shared';
 
 export default function LaborPressureRanking() {
-  const { filteredMetrics, data, updateFilters } = useData();
+  const { data, filteredOT, filteredBonus, updateFilter } = useData();
+  if (!data) return null;
 
-  const byFacility = groupBy(filteredMetrics, m => m.facility);
-  const rankings = Object.entries(byFacility)
-    .map(([fac, rows]) => {
-      const facInfo = data.facilities.find(f => f.name === fac);
-      const ot = sumField(rows, 'otDollars');
-      const bonus = sumField(rows, 'bonusDollars');
-      const score = ot + bonus;
-      const driver = ot > bonus ? 'OT' : bonus > ot ? 'Bonus' : 'Mixed';
-      return { fac, region: facInfo?.region || '—', group: facInfo?.group || '—', ot, bonus, score, driver };
-    })
-    .sort((a, b) => b.score - a.score);
+  const otByFac = groupBy(filteredOT, r => r.facility);
+  const bonusByFac = groupBy(filteredBonus, r => r.facility);
+
+  const rankings = data.facilities.map(f => {
+    const ot = sumNum(otByFac[f.name] || [], 'otDollars');
+    const bonus = sumNum(bonusByFac[f.name] || [], 'bonusDollars');
+    const score = ot + bonus;
+    const driver = ot > bonus * 1.5 ? 'OT-Driven' : bonus > ot * 1.5 ? 'Bonus-Driven' : 'Mixed';
+    return { ...f, ot, bonus, score, driver };
+  }).filter(r => r.score > 0).sort((a, b) => b.score - a.score);
 
   const maxScore = rankings[0]?.score || 1;
 
   return (
-    <div className="p-8 space-y-6">
-      <SectionCard title={`Labor Pressure Ranking — ${rankings.length} Facilities`}>
+    <div className="p-6 space-y-6">
+      <SectionCard title={`Labor Pressure Ranking — ${rankings.length} Facilities with Activity`}>
         <DataTable
-          headers={['Rank', 'Facility', 'Region', 'Acq Group', 'Risk', 'Driver', 'OT $', 'Bonus $', 'Pressure Score']}
-          rows={rankings.slice(0, 100).map((r, i) => {
-            const risk = riskCategory(r.score, maxScore);
-            return [
-              <span key={i} className="font-black text-slate-400">#{i + 1}</span>,
-              r.fac, r.region, r.group,
-              <span key={i} className={`px-2 py-0.5 rounded-lg text-[10px] font-black ${risk.color}`}>{risk.label}</span>,
-              <span key={i} className="text-[10px] font-bold text-slate-600 uppercase">{r.driver}</span>,
-              fmt$(r.ot), fmt$(r.bonus),
-              <span key={i} className="font-black text-slate-800">{fmt$(r.score)}</span>
-            ];
-          })}
-          onRowClick={i => updateFilters({ facility: rankings[i].fac })}
+          headers={['#', 'Facility', 'Acq Group', 'Region', 'Pay Cycle', 'Risk', 'Driver', 'OT $', 'Bonus $', 'Pressure Score', 'Comparable']}
+          rows={rankings.slice(0, 150).map((r, i) => [
+            <span key={i} className="text-[9px] font-black text-slate-400">#{i + 1}</span>,
+            r.name, r.subgroup, r.region, r.payCycle,
+            riskBadge(r.score, maxScore),
+            <span key={i} className="text-[9px] font-bold text-slate-600">{r.driver}</span>,
+            fmt$(r.ot), fmt$(r.bonus),
+            <strong key={i} className="text-slate-900">{fmt$(r.score)}</strong>,
+            <Badge key={i} label={r.comparableStatus || '—'} color={r.comparableStatus === 'Comparable' ? 'emerald' : 'amber'} />
+          ])}
+          onRowClick={i => updateFilter('facility', rankings[i].name)}
         />
       </SectionCard>
     </div>

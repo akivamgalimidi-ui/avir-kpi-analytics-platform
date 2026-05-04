@@ -1,335 +1,424 @@
 import * as XLSX from 'xlsx';
 
-export interface ParsedFacility {
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+export interface Facility {
   name: string;
   normalized: string;
+  subgroup: string;   // "TX 1.0" etc.
   region: string;
-  group: string;
+  payCycle: string;
+  latestPeriod: string;
+  priorPeriod: string;
+  comparableStatus: string;
 }
 
-export interface ParsedMetric {
+export interface PayPeriod {
+  label: string;       // "03/28/2026"
+  dateValue: Date | null;
+}
+
+export interface OTRow {
   facility: string;
-  region: string;
-  group: string;
+  subgroup: string;
+  department: string;
+  position: string;
+  employee: string;
   payPeriod: string;
   otDollars: number;
   otHours: number;
-  bonusDollars: number;
-  hppd: number;
-  ppdDollars: number;
-  sheet: string;
+  otPct: number;
 }
 
-export interface ParsedEmployee {
-  name: string;
+export interface BonusRow {
   facility: string;
-  otDollars: number;
-  bonusDollars: number;
+  subgroup: string;
+  bonusType: string;
+  position: string;
+  employee: string;
   payPeriod: string;
+  bonusDollars: number;
 }
 
-export interface WorkbookParseResult {
+export interface PPDRow {
+  facility: string;
+  subgroup: string;
+  metricType: string;   // "Direct Care HPPD", "Direct Care PPD $", "Overall Labor PPD $"
+  payPeriod: string;
+  value: number;
+}
+
+export interface ParsedData {
   filename: string;
   fileSize: number;
+  parsedAt: string;
   sheetsDetected: string[];
   sheetRowCounts: Record<string, number>;
-  facilities: ParsedFacility[];
+
+  // Dimensions
+  facilities: Facility[];
+  subgroups: string[];
   regions: string[];
-  groups: string[];
   payPeriods: string[];
-  metrics: ParsedMetric[];
-  employees: ParsedEmployee[];
+  departments: string[];
+  positions: string[];
+  bonusTypes: string[];
+
+  // Facts
+  otRows: OTRow[];
+  bonusRows: BonusRow[];
+  ppdRows: PPDRow[];
+
+  // Metadata
   warnings: string[];
-  parsedAt: string;
+  parserCoverage: Record<string, string>;
 }
 
-function normalize(s: string): string {
-  return (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
-}
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function isTotal(s: string): boolean {
-  const n = normalize(s);
-  return n.includes('total') || n.includes('grand') || n.includes('subtotal') || n === '';
+function norm(v: any): string {
+  return String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 function toNum(v: any): number {
   if (v === null || v === undefined || v === '') return 0;
-  const n = parseFloat(String(v).replace(/[$,]/g, ''));
+  const n = parseFloat(String(v).replace(/[$,%]/g, ''));
   return isNaN(n) ? 0 : n;
 }
 
-function isDateLike(v: any): boolean {
-  if (!v) return false;
-  if (v instanceof Date) return true;
-  const s = String(v);
-  return /\d{1,2}[\/\-]\d{1,2}([\/\-]\d{2,4})?/.test(s) || /\d{4}-\d{2}/.test(s);
+function toDate(v: any): Date | null {
+  if (!v) return null;
+  if (v instanceof Date) return v;
+  const d = new Date(String(v));
+  return isNaN(d.getTime()) ? null : d;
 }
 
-function formatPeriod(v: any): string {
-  if (!v) return '';
-  if (v instanceof Date) {
-    return v.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  }
-  return String(v).trim();
+function formatDate(v: any): string {
+  const d = toDate(v);
+  if (!d) return String(v ?? '').trim();
+  return d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
 }
 
-/** Parse facilities, regions, groups from any sheet with column heuristics */
-function parseDimensions(wb: XLSX.WorkBook): { facilities: ParsedFacility[]; regions: string[]; groups: string[] } {
-  const facilityMap: Record<string, ParsedFacility> = {};
-  const regions = new Set<string>();
-  const groups = new Set<string>();
-
-  for (const sheetName of wb.SheetNames) {
-    const sheet = wb.Sheets[sheetName];
-    if (!sheet) continue;
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
-    if (rows.length < 2) continue;
-
-    // Find header row (scan first 10 rows)
-    let headerRow = -1;
-    let colFacility = -1, colRegion = -1, colGroup = -1;
-
-    for (let r = 0; r < Math.min(10, rows.length); r++) {
-      const row = rows[r].map((c: any) => normalize(String(c)));
-      const fi = row.findIndex(c => c.includes('facilit') || c === 'name' || c === 'location');
-      const ri = row.findIndex(c => c.includes('region'));
-      const gi = row.findIndex(c => c.includes('acq') || c.includes('group') || c.includes('organization') || c.includes('cluster'));
-      if (fi >= 0 || ri >= 0 || gi >= 0) {
-        headerRow = r;
-        colFacility = fi >= 0 ? fi : 0;
-        colRegion = ri;
-        colGroup = gi;
-        break;
-      }
-    }
-
-    // Fallback: if first column looks like facility names
-    if (headerRow === -1 && rows.length > 5) {
-      const sample = rows.slice(1, 6).map(r => String(r[0] || ''));
-      if (sample.filter(s => s.length > 3 && !isTotal(s)).length >= 3) {
-        headerRow = 0;
-        colFacility = 0;
-      }
-    }
-
-    if (headerRow === -1) continue;
-
-    for (let r = headerRow + 1; r < rows.length; r++) {
-      const row = rows[r];
-      if (!row || !row[colFacility]) continue;
-      const fName = String(row[colFacility]).trim();
-      if (isTotal(fName) || fName.length < 2) continue;
-
-      const region = colRegion >= 0 ? String(row[colRegion] || '').trim() : '';
-      const group = colGroup >= 0 ? String(row[colGroup] || '').trim() : '';
-
-      if (!facilityMap[fName]) {
-        facilityMap[fName] = { name: fName, normalized: normalize(fName), region, group };
-      } else {
-        if (region && !facilityMap[fName].region) facilityMap[fName].region = region;
-        if (group && !facilityMap[fName].group) facilityMap[fName].group = group;
-      }
-
-      if (region && !isTotal(region)) regions.add(region);
-      if (group && !isTotal(group)) groups.add(group);
-    }
-  }
-
-  return {
-    facilities: Object.values(facilityMap),
-    regions: Array.from(regions).filter(Boolean),
-    groups: Array.from(groups).filter(Boolean)
-  };
+function getSheet(wb: XLSX.WorkBook, name: string): any[][] | null {
+  const ws = wb.Sheets[name];
+  if (!ws) return null;
+  return XLSX.utils.sheet_to_json(ws, { header: 1, defval: null }) as any[][];
 }
 
-/** Parse OT/Bonus metrics from sheets with wide date-column layout */
-function parseWideMetrics(wb: XLSX.WorkBook, facilities: ParsedFacility[]): { metrics: ParsedMetric[]; payPeriods: string[]; employees: ParsedEmployee[] } {
-  const metrics: ParsedMetric[] = [];
-  const payPeriodSet = new Set<string>();
-  const employees: ParsedEmployee[] = [];
-
-  const facilityLookup: Record<string, ParsedFacility> = {};
-  for (const f of facilities) {
-    facilityLookup[normalize(f.name)] = f;
-  }
-
-  // Parse "OT by Pay Period" style sheets (facility rows, date columns)
-  const otSheet = wb.Sheets['OT by Pay Period'];
-  const bonusSheet = wb.Sheets['Bonus by PPE'];
-  const ppdSheet = wb.Sheets['PPDs'];
-  const topOtSheet = wb.Sheets['Top OT Earners'];
-
-  function parseWideSheet(sheet: XLSX.WorkSheet | undefined, metricType: 'ot' | 'bonus' | 'ppd') {
-    if (!sheet) return;
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
-    if (rows.length < 3) return;
-
-    // Find date headers row (look for row with multiple date-like or numeric column headers)
-    let dateRow = -1;
-    let dateCols: { col: number; period: string }[] = [];
-
-    for (let r = 0; r < Math.min(10, rows.length); r++) {
-      const row = rows[r];
-      const found = row.map((v: any, ci: number) => ({ v, ci }))
-        .filter(({ v }) => isDateLike(v) || (typeof v === 'number' && v > 40000 && v < 55000)); // Excel date serials
-
-      if (found.length >= 2) {
-        dateRow = r;
-        dateCols = found.map(({ v, ci }) => ({
-          col: ci,
-          period: formatPeriod(
-            typeof v === 'number' && v > 40000 ? XLSX.SSF.parse_date_code(v) : v
-          )
-        }));
-        dateCols.forEach(d => payPeriodSet.add(d.period));
-        break;
-      }
-    }
-
-    // If no date row found, treat all numeric columns as a single period
-    if (dateRow === -1) {
-      const header = rows[0] || [];
-      dateCols = header.map((v: any, ci: number) => ({ v, ci }))
-        .filter(({ v, ci }) => ci > 0 && typeof v !== 'undefined' && v !== '')
-        .slice(0, 20)
-        .map(({ v, ci }) => ({ col: ci, period: String(v).trim() }));
-      dateRow = 0;
-    }
-
-    for (let r = dateRow + 1; r < rows.length; r++) {
-      const row = rows[r];
-      if (!row || !row[0]) continue;
-      const facilityName = String(row[0]).trim();
-      if (isTotal(facilityName)) continue;
-
-      const fInfo = facilityLookup[normalize(facilityName)] || { name: facilityName, normalized: normalize(facilityName), region: '', group: '' };
-
-      for (const { col, period } of dateCols) {
-        const val = toNum(row[col]);
-        if (val === 0) continue;
-
-        // Find existing metric entry or create new
-        let entry = metrics.find(m => m.facility === fInfo.name && m.payPeriod === period);
-        if (!entry) {
-          entry = {
-            facility: fInfo.name,
-            region: fInfo.region,
-            group: fInfo.group,
-            payPeriod: period,
-            otDollars: 0,
-            otHours: 0,
-            bonusDollars: 0,
-            hppd: 0,
-            ppdDollars: 0,
-            sheet: sheet === otSheet ? 'OT by Pay Period' : sheet === bonusSheet ? 'Bonus by PPE' : 'PPDs'
-          };
-          metrics.push(entry);
-        }
-
-        if (metricType === 'ot') entry.otDollars += val;
-        else if (metricType === 'bonus') entry.bonusDollars += val;
-        else if (metricType === 'ppd') {
-          // Try to detect HPPD vs PPD$ from column header
-          const header = String(rows[dateRow - 1]?.[col] || rows[0]?.[col] || '').toLowerCase();
-          if (header.includes('hour') || header.includes('hppd')) entry.hppd += val;
-          else entry.ppdDollars += val;
-        }
-      }
-    }
-  }
-
-  parseWideSheet(otSheet, 'ot');
-  parseWideSheet(bonusSheet, 'bonus');
-  parseWideSheet(ppdSheet, 'ppd');
-
-  // Parse Top OT Earners for employee data
-  if (topOtSheet) {
-    const rows = XLSX.utils.sheet_to_json(topOtSheet, { header: 1, defval: '' }) as any[][];
-    let headerRow = rows.findIndex(r =>
-      r.some((c: any) => normalize(String(c)).includes('name') || normalize(String(c)).includes('employee'))
-    );
-    if (headerRow < 0) headerRow = 0;
-    const header = rows[headerRow].map((c: any) => normalize(String(c)));
-    const nameCol = header.findIndex(c => c.includes('name') || c.includes('employee'));
-    const facilCol = header.findIndex(c => c.includes('facilit'));
-    const otCol = header.findIndex(c => c.includes('ot') && (c.includes('dollar') || c.includes('$') || c.includes('amount') || c.includes('total')));
-    const periodCol = header.findIndex(c => c.includes('period') || c.includes('date') || c.includes('ppe'));
-
-    for (let r = headerRow + 1; r < rows.length; r++) {
-      const row = rows[r];
-      const name = String(row[nameCol >= 0 ? nameCol : 0] || '').trim();
-      if (!name || isTotal(name)) continue;
-      employees.push({
-        name,
-        facility: facilCol >= 0 ? String(row[facilCol] || '').trim() : '',
-        otDollars: toNum(row[otCol >= 0 ? otCol : 2]),
-        bonusDollars: 0,
-        payPeriod: periodCol >= 0 ? formatPeriod(row[periodCol]) : ''
-      });
-    }
-  }
-
-  // Also check Bonus by Type for employee bonus data
-  const bonusTypeSheet = wb.Sheets['Bonus by Type'];
-  if (bonusTypeSheet) {
-    const rows = XLSX.utils.sheet_to_json(bonusTypeSheet, { header: 1, defval: '' }) as any[][];
-    let headerRow = rows.findIndex(r =>
-      r.some((c: any) => normalize(String(c)).includes('employee') || normalize(String(c)).includes('name'))
-    );
-    if (headerRow >= 0) {
-      const header = rows[headerRow].map((c: any) => normalize(String(c)));
-      const nameCol = header.findIndex(c => c.includes('name') || c.includes('employee'));
-      const facilCol = header.findIndex(c => c.includes('facilit'));
-      const amtCol = header.findIndex(c => c.includes('amount') || c.includes('bonus') || c.includes('dollar'));
-      for (let r = headerRow + 1; r < rows.length; r++) {
-        const row = rows[r];
-        const name = String(row[nameCol >= 0 ? nameCol : 0] || '').trim();
-        if (!name || isTotal(name)) continue;
-        const existing = employees.find(e => normalize(e.name) === normalize(name));
-        const bonusAmt = toNum(row[amtCol >= 0 ? amtCol : 2]);
-        if (existing) existing.bonusDollars += bonusAmt;
-        else employees.push({ name, facility: facilCol >= 0 ? String(row[facilCol] || '') : '', otDollars: 0, bonusDollars: bonusAmt, payPeriod: '' });
-      }
-    }
-  }
-
-  return {
-    metrics,
-    payPeriods: Array.from(payPeriodSet).filter(Boolean),
-    employees
-  };
+// Fill-down empty cells in a column (for merged-cell style data)
+function fillDown(col: any[]): any[] {
+  let last: any = null;
+  return col.map(v => {
+    if (v !== null && v !== undefined && String(v).trim() !== '') last = v;
+    return last;
+  });
 }
 
-export async function parseWorkbook(file: File): Promise<WorkbookParseResult> {
+// ─── Parse Pay Cycle Mapping ─────────────────────────────────────────────────
+
+function parsePayCycleMapping(wb: XLSX.WorkBook, warnings: string[]): Facility[] {
+  const rows = getSheet(wb, 'Pay Cycle Mapping');
+  if (!rows) {
+    warnings.push('Pay Cycle Mapping sheet not found — facility metadata unavailable');
+    return [];
+  }
+
+  // Header is row 3 (index 2)
+  // Cols: Subgroup, Facility, Region, Pay Cycle Group, Manual Override, [period cols], Latest Period, Correct Prior Period, Comparable Status
+  const headerRow = rows[2] || [];
+  const subgroupCol = headerRow.findIndex(h => norm(h).includes('subgroup'));
+  const facilityCol = headerRow.findIndex(h => norm(h) === 'facility');
+  const regionCol = headerRow.findIndex(h => norm(h) === 'region');
+  const payCycleCol = headerRow.findIndex(h => norm(h).includes('pay cycle group'));
+  const latestCol = headerRow.findIndex(h => norm(h).includes('latest'));
+  const priorCol = headerRow.findIndex(h => norm(h).includes('correct prior'));
+  const comparableCol = headerRow.findIndex(h => norm(h).includes('comparable status'));
+
+  const facilities: Facility[] = [];
+
+  for (let r = 3; r < rows.length; r++) {
+    const row = rows[r];
+    if (!row) continue;
+    const facility = String(row[facilityCol] ?? '').trim();
+    if (!facility || facility.toLowerCase().includes('total')) continue;
+
+    facilities.push({
+      name: facility,
+      normalized: norm(facility),
+      subgroup: String(row[subgroupCol] ?? '').trim(),
+      region: String(row[regionCol] ?? '').trim(),
+      payCycle: String(row[payCycleCol] ?? '').trim(),
+      latestPeriod: formatDate(row[latestCol]),
+      priorPeriod: formatDate(row[priorCol]),
+      comparableStatus: String(row[comparableCol] ?? '').trim(),
+    });
+  }
+
+  return facilities;
+}
+
+// ─── Parse OT by Pay Period ───────────────────────────────────────────────────
+
+function parseOTbyPayPeriod(wb: XLSX.WorkBook, warnings: string[]): { otRows: OTRow[]; payPeriods: string[] } {
+  const rows = getSheet(wb, 'OT by Pay Period');
+  if (!rows) {
+    warnings.push('OT by Pay Period sheet not found');
+    return { otRows: [], payPeriods: [] };
+  }
+
+  // Row 3 (idx=2): section labels — "OT Dollars ($)", "", "", "", "OT Hours", "OT % of Gross ($)"
+  // Row 4 (idx=3): column headers — Subgroup, Facility, Dept, "", Position, Employee, [dates x3], [dates x3], [dates x3]
+  const labelRow = rows[2] || [];
+  const headerRow = rows[3] || [];
+
+  // Find date columns (dates appear as date-like strings or Date objects starting at col 6)
+  const dateCols: { col: number; period: string; section: 'otDollars' | 'otHours' | 'otPct' }[] = [];
+  let currentSection: 'otDollars' | 'otHours' | 'otPct' = 'otDollars';
+
+  for (let c = 0; c < headerRow.length; c++) {
+    const label = norm(String(labelRow[c] ?? ''));
+    if (label.includes('ot dollars') || label.includes('ot $')) currentSection = 'otDollars';
+    else if (label.includes('ot hours') || label.includes('hours')) currentSection = 'otHours';
+    else if (label.includes('ot %') || label.includes('gross')) currentSection = 'otPct';
+
+    const h = headerRow[c];
+    const d = toDate(h);
+    if (d || (typeof h === 'string' && /\d+\/\d+\/\d+/.test(h))) {
+      dateCols.push({ col: c, period: formatDate(h), section: currentSection });
+    }
+  }
+
+  if (dateCols.length === 0) {
+    warnings.push('OT by Pay Period: no date columns detected');
+    return { otRows: [], payPeriods: [] };
+  }
+
+  const payPeriodSet = new Set<string>(dateCols.map(d => d.period));
+
+  // Fill-down subgroup, facility, dept for merged-cell layout
+  const subgroupCol = headerRow.findIndex(h => norm(h).includes('subgroup'));
+  const facilityCol = headerRow.findIndex(h => norm(h) === 'facility');
+  const deptCol = headerRow.findIndex(h => norm(h).includes('department') || norm(h).includes('dept'));
+  const posCol = headerRow.findIndex(h => norm(h).includes('position'));
+  const empCol = headerRow.findIndex(h => norm(h).includes('employee'));
+
+  const dataRows = rows.slice(4);
+  const subgroups = fillDown(dataRows.map(r => r?.[subgroupCol]));
+  const facilityNames = fillDown(dataRows.map(r => r?.[facilityCol]));
+  const departments = fillDown(dataRows.map(r => r?.[deptCol]));
+
+  const otRows: OTRow[] = [];
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const row = dataRows[i];
+    if (!row) continue;
+
+    const facility = String(facilityNames[i] ?? '').trim();
+    if (!facility || facility.toLowerCase().includes('total')) continue;
+
+    const employee = String(row[empCol] ?? '').trim();
+    const position = String(row[posCol] ?? '').trim();
+    const department = String(departments[i] ?? '').trim();
+    const subgroup = String(subgroups[i] ?? '').trim();
+
+    // Group by payPeriod for this employee row
+    const byPeriod: Record<string, Partial<OTRow>> = {};
+
+    for (const { col, period, section } of dateCols) {
+      const val = toNum(row[col]);
+      if (val === 0) continue;
+      if (!byPeriod[period]) {
+        byPeriod[period] = { facility, subgroup, department, position, employee, payPeriod: period, otDollars: 0, otHours: 0, otPct: 0 };
+      }
+      if (section === 'otDollars') byPeriod[period].otDollars = (byPeriod[period].otDollars || 0) + val;
+      else if (section === 'otHours') byPeriod[period].otHours = (byPeriod[period].otHours || 0) + val;
+      else if (section === 'otPct') byPeriod[period].otPct = (byPeriod[period].otPct || 0) + val;
+    }
+
+    for (const row of Object.values(byPeriod)) {
+      if ((row.otDollars || 0) > 0 || (row.otHours || 0) > 0) {
+        otRows.push(row as OTRow);
+      }
+    }
+  }
+
+  return { otRows, payPeriods: Array.from(payPeriodSet) };
+}
+
+// ─── Parse Bonus by PPE ───────────────────────────────────────────────────────
+
+function parseBonusByPPE(wb: XLSX.WorkBook, warnings: string[]): BonusRow[] {
+  const rows = getSheet(wb, 'Bonus by PPE');
+  if (!rows) {
+    warnings.push('Bonus by PPE sheet not found');
+    return [];
+  }
+
+  // Row 3 (idx=2): Subgroup, Facility, Bonus Type, "", Position, Employee Name, [dates]
+  const headerRow = rows[2] || [];
+  const subgroupCol = headerRow.findIndex(h => norm(h).includes('subgroup'));
+  const facilityCol = headerRow.findIndex(h => norm(h) === 'facility');
+  const bonusTypeCol = headerRow.findIndex(h => norm(h).includes('bonus type'));
+  const posCol = headerRow.findIndex(h => norm(h).includes('position'));
+  const empCol = headerRow.findIndex(h => norm(h).includes('employee'));
+
+  const dateCols: { col: number; period: string }[] = [];
+  for (let c = 0; c < headerRow.length; c++) {
+    const d = toDate(headerRow[c]);
+    if (d) dateCols.push({ col: c, period: formatDate(headerRow[c]) });
+  }
+
+  if (dateCols.length === 0) {
+    warnings.push('Bonus by PPE: no date columns detected');
+    return [];
+  }
+
+  const dataRows = rows.slice(3);
+  const subgroups = fillDown(dataRows.map(r => r?.[subgroupCol]));
+  const facilityNames = fillDown(dataRows.map(r => r?.[facilityCol]));
+  const bonusTypes = fillDown(dataRows.map(r => r?.[bonusTypeCol]));
+
+  const bonusRows: BonusRow[] = [];
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const row = dataRows[i];
+    if (!row) continue;
+    const facility = String(facilityNames[i] ?? '').trim();
+    if (!facility || facility.toLowerCase().includes('total')) continue;
+
+    const employee = String(row[empCol] ?? '').trim();
+    const position = String(row[posCol] ?? '').trim();
+    const bonusType = String(bonusTypes[i] ?? '').trim();
+    const subgroup = String(subgroups[i] ?? '').trim();
+
+    for (const { col, period } of dateCols) {
+      const val = toNum(row[col]);
+      if (val === 0) continue;
+      bonusRows.push({ facility, subgroup, bonusType, position, employee, payPeriod: period, bonusDollars: val });
+    }
+  }
+
+  return bonusRows;
+}
+
+// ─── Parse PPDs ───────────────────────────────────────────────────────────────
+
+function parsePPDs(wb: XLSX.WorkBook, warnings: string[]): PPDRow[] {
+  const rows = getSheet(wb, 'PPDs');
+  if (!rows) {
+    warnings.push('PPDs sheet not found');
+    return [];
+  }
+
+  // Row 4 (idx=3): "", Subgroup Name, Facility, "", [dates...]
+  // Col A has metric type (fill-down): "Direct Care HPPD", "Direct Care PPD $", "Overall Labor PPD $"
+  const headerRow = rows[3] || [];
+  const subgroupCol = 1;
+  const facilityCol = 2;
+
+  const dateCols: { col: number; period: string }[] = [];
+  for (let c = 4; c < headerRow.length; c++) {
+    const v = headerRow[c];
+    if (v) dateCols.push({ col: c, period: formatDate(v) });
+  }
+
+  if (dateCols.length === 0) {
+    warnings.push('PPDs: no date columns found');
+    return [];
+  }
+
+  const dataRows = rows.slice(4);
+  const metricTypes = fillDown(dataRows.map(r => r?.[0]));
+  const subgroups = fillDown(dataRows.map(r => r?.[subgroupCol]));
+  const facilities = fillDown(dataRows.map(r => r?.[facilityCol]));
+
+  const ppdRows: PPDRow[] = [];
+
+  for (let i = 0; i < dataRows.length; i++) {
+    const row = dataRows[i];
+    if (!row) continue;
+    const facility = String(facilities[i] ?? '').trim();
+    if (!facility || facility.toLowerCase().includes('total')) continue;
+
+    const metricType = String(metricTypes[i] ?? '').trim();
+    const subgroup = String(subgroups[i] ?? '').trim();
+
+    for (const { col, period } of dateCols) {
+      const val = toNum(row[col]);
+      if (val === 0) continue;
+      ppdRows.push({ facility, subgroup, metricType, payPeriod: period, value: val });
+    }
+  }
+
+  return ppdRows;
+}
+
+// ─── Main Entry Point ─────────────────────────────────────────────────────────
+
+export async function parseWorkbook(file: File): Promise<ParsedData> {
   const buffer = await file.arrayBuffer();
   const wb = XLSX.read(buffer, { type: 'array', cellDates: true });
 
+  const sheetsDetected = wb.SheetNames;
   const sheetRowCounts: Record<string, number> = {};
-  for (const name of wb.SheetNames) {
-    const sheet = wb.Sheets[name];
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' }) as any[][];
+  for (const name of sheetsDetected) {
+    const ws = wb.Sheets[name];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1 }) as any[][];
     sheetRowCounts[name] = rows.length;
   }
 
   const warnings: string[] = [];
-  const { facilities, regions, groups } = parseDimensions(wb);
-  if (facilities.length === 0) warnings.push('No facilities detected — check column headers in your workbook.');
+  const coverage: Record<string, string> = {};
 
-  const { metrics, payPeriods, employees } = parseWideMetrics(wb, facilities);
-  if (metrics.length === 0) warnings.push('No metric rows parsed — sheets may have unexpected layout.');
+  // Parse all dimensions and facts
+  const facilities = parsePayCycleMapping(wb, warnings);
+  coverage['Pay Cycle Mapping'] = facilities.length > 0 ? `${facilities.length} facilities` : 'FAILED';
+
+  const { otRows, payPeriods } = parseOTbyPayPeriod(wb, warnings);
+  coverage['OT by Pay Period'] = otRows.length > 0 ? `${otRows.length} rows` : 'FAILED';
+
+  const bonusRows = parseBonusByPPE(wb, warnings);
+  coverage['Bonus by PPE'] = bonusRows.length > 0 ? `${bonusRows.length} rows` : 'FAILED';
+
+  const ppdRows = parsePPDs(wb, warnings);
+  coverage['PPDs'] = ppdRows.length > 0 ? `${ppdRows.length} rows` : 'FAILED';
+
+  // Derive dimension sets
+  const subgroups = [...new Set(facilities.map(f => f.subgroup).filter(Boolean))];
+  const regions = [...new Set(facilities.map(f => f.region).filter(Boolean))];
+  const departments = [...new Set(otRows.map(r => r.department).filter(Boolean))];
+  const positions = [...new Set([...otRows.map(r => r.position), ...bonusRows.map(r => r.position)].filter(Boolean))];
+  const bonusTypes = [...new Set(bonusRows.map(r => r.bonusType).filter(Boolean))];
+
+  // Enrich OT/Bonus with region/subgroup from facility lookup
+  const facilityLookup = new Map(facilities.map(f => [f.normalized, f]));
+  const getRegion = (facilityName: string) => facilityLookup.get(norm(facilityName))?.region || '';
+  const getSubgroup = (facilityName: string) => facilityLookup.get(norm(facilityName))?.subgroup || '';
+
+  for (const r of otRows) {
+    if (!r.subgroup) r.subgroup = getSubgroup(r.facility);
+  }
+  for (const r of bonusRows) {
+    if (!r.subgroup) r.subgroup = getSubgroup(r.facility);
+  }
 
   return {
     filename: file.name,
     fileSize: file.size,
-    sheetsDetected: wb.SheetNames,
+    parsedAt: new Date().toISOString(),
+    sheetsDetected,
     sheetRowCounts,
     facilities,
+    subgroups,
     regions,
-    groups,
-    payPeriods,
-    metrics,
-    employees,
+    payPeriods: payPeriods.sort(),
+    departments: departments.sort(),
+    positions: positions.sort(),
+    bonusTypes: bonusTypes.sort(),
+    otRows,
+    bonusRows,
+    ppdRows,
     warnings,
-    parsedAt: new Date().toISOString()
+    parserCoverage: coverage,
   };
 }

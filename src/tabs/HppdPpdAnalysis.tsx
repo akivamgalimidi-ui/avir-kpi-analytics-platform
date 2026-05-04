@@ -1,69 +1,99 @@
 import React from 'react';
 import { useData } from '../context/DataContext';
-import { SectionCard, DataTable, StatCard, fmt$, fmt2, sumField, groupBy } from '../components/shared';
+import { SectionCard, DataTable, StatCard, fmt$, fmtN, fmt2, sumNum, groupBy } from '../components/shared';
 
 export default function HppdPpdAnalysis() {
-  const { filteredMetrics, updateFilters } = useData();
+  const { data, filteredPPD, updateFilter } = useData();
+  if (!data) return null;
 
-  const hppdRows = filteredMetrics.filter(r => r.hppd > 0);
-  const ppdRows = filteredMetrics.filter(r => r.ppdDollars > 0);
-  const avgHppd = hppdRows.length ? sumField(hppdRows, 'hppd') / hppdRows.length : 0;
-  const avgPpd = ppdRows.length ? sumField(ppdRows, 'ppdDollars') / ppdRows.length : 0;
+  const hppdRows = filteredPPD.filter(r => r.metricType === 'Direct Care HPPD');
+  const dcPpdRows = filteredPPD.filter(r => r.metricType === 'Direct Care PPD $');
+  const olPpdRows = filteredPPD.filter(r => r.metricType === 'Overall Labor PPD $');
 
-  const byFacility = groupBy(filteredMetrics, m => m.facility);
-  const facilityData = Object.entries(byFacility)
+  const avg = (rows: typeof filteredPPD) => rows.length ? sumNum(rows, 'value') / rows.length : 0;
+
+  const byFac = groupBy(hppdRows, r => r.facility);
+  const facHppd = Object.entries(byFac)
     .map(([fac, rows]) => {
-      const hr = rows.filter(r => r.hppd > 0);
-      const pr = rows.filter(r => r.ppdDollars > 0);
+      const f = data.facilities.find(x => x.name === fac);
+      const dcPpd = dcPpdRows.filter(r => r.facility === fac);
+      const olPpd = olPpdRows.filter(r => r.facility === fac);
       return {
-        fac,
-        region: rows[0]?.region || '—',
-        hppd: hr.length ? sumField(hr, 'hppd') / hr.length : 0,
-        ppd: pr.length ? sumField(pr, 'ppdDollars') / pr.length : 0
+        fac, sg: f?.subgroup || '—', region: f?.region || '—',
+        hppd: avg(rows), dcPpd: avg(dcPpd), olPpd: avg(olPpd)
       };
-    })
-    .filter(r => r.hppd > 0 || r.ppd > 0)
-    .sort((a, b) => b.ppd - a.ppd);
+    }).sort((a, b) => b.olPpd - a.olPpd);
 
-  const byRegion = groupBy(filteredMetrics, m => m.region || 'Unassigned');
+  const byPeriod = groupBy(filteredPPD, r => r.payPeriod);
+  const periodData = Object.entries(byPeriod)
+    .map(([p, rows]) => ({
+      p,
+      hppd: avg(rows.filter(r => r.metricType === 'Direct Care HPPD')),
+      dcPpd: avg(rows.filter(r => r.metricType === 'Direct Care PPD $')),
+      olPpd: avg(rows.filter(r => r.metricType === 'Overall Labor PPD $')),
+    }))
+    .filter(r => r.hppd > 0 || r.olPpd > 0)
+    .sort((a, b) => a.p.localeCompare(b.p));
+
+  const byRegion = groupBy(hppdRows, r => data.facilities.find(f => f.name === r.facility)?.region || 'Unknown');
   const regionData = Object.entries(byRegion)
     .map(([region, rows]) => {
-      const hr = rows.filter(r => r.hppd > 0);
-      const pr = rows.filter(r => r.ppdDollars > 0);
-      return {
-        region,
-        hppd: hr.length ? sumField(hr, 'hppd') / hr.length : 0,
-        ppd: pr.length ? sumField(pr, 'ppdDollars') / pr.length : 0
-      };
-    })
-    .filter(r => r.hppd > 0 || r.ppd > 0);
+      const olPpd = olPpdRows.filter(r => data.facilities.find(f => f.name === r.facility)?.region === region);
+      return { region, hppd: avg(rows), olPpd: avg(olPpd) };
+    });
 
   return (
-    <div className="p-8 space-y-6">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <StatCard label="Avg Direct Care HPPD" value={avgHppd ? fmt2(avgHppd) : '—'} sub="Hours Per Patient Day" accent="bg-blue-50 text-blue-700" />
-        <StatCard label="Avg Overall PPD $" value={fmt$(avgPpd)} sub="Labor Cost Per Patient Day" accent="bg-emerald-50 text-emerald-700" />
-        <StatCard label="Facilities w/ HPPD" value={String(hppdRows.length > 0 ? [...new Set(hppdRows.map(r => r.facility))].length : 0)} accent="bg-indigo-50 text-indigo-700" />
-        <StatCard label="Facilities w/ PPD $" value={String(ppdRows.length > 0 ? [...new Set(ppdRows.map(r => r.facility))].length : 0)} accent="bg-teal-50 text-teal-700" />
+    <div className="p-6 space-y-6 pb-20">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+        <StatCard label="Avg Direct Care HPPD" value={avg(hppdRows) ? fmt2(avg(hppdRows)) : '—'} sub="Hours Per Patient Day" color="blue" />
+        <StatCard label="Avg Direct Care PPD $" value={avg(dcPpdRows) ? fmt$(avg(dcPpdRows)) : '—'} sub="Direct Labor Per Patient Day" color="teal" />
+        <StatCard label="Avg Overall Labor PPD $" value={avg(olPpdRows) ? fmt$(avg(olPpdRows)) : '—'} sub="Total Labor Per Patient Day" color="indigo" />
       </div>
 
-      <SectionCard title="HPPD & PPD $ by Facility">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <SectionCard title="Avg Direct Care HPPD Trend">
+          <div className="p-4">
+            <KpiLineChart data={periodData} xKey="p" yKey="hppd" name="HPPD" color="#2563eb" />
+          </div>
+        </SectionCard>
+        <SectionCard title="Avg Overall Labor PPD $ Trend">
+          <div className="p-4">
+            <KpiLineChart data={periodData} xKey="p" yKey="olPpd" name="PPD $" color="#4f46e5" />
+          </div>
+        </SectionCard>
+      </div>
+
+      <SectionCard title="HPPD & PPD Trend by Pay Period">
         <DataTable
-          headers={['Facility', 'Region', 'Avg HPPD', 'Avg PPD $']}
-          rows={facilityData.slice(0, 100).map(r => [
-            r.fac, r.region,
+          headers={['Pay Period', 'Avg HPPD', 'Avg DC PPD $', 'Avg Overall PPD $']}
+          rows={periodData.map(r => [
+            r.p,
             r.hppd ? <span className="font-bold text-blue-700">{fmt2(r.hppd)}</span> : '—',
-            r.ppd ? <span className="font-bold text-emerald-700">{fmt$(r.ppd)}</span> : '—'
+            r.dcPpd ? fmt$(r.dcPpd) : '—',
+            r.olPpd ? <span className="font-bold text-indigo-700">{fmt$(r.olPpd)}</span> : '—'
           ])}
-          onRowClick={i => updateFilters({ facility: facilityData[i].fac })}
+          onRowClick={i => updateFilter('payPeriod', periodData[i].p)}
         />
       </SectionCard>
 
-      <SectionCard title="HPPD & PPD $ by Region">
+      <SectionCard title={`HPPD & PPD by Facility (${facHppd.length} facilities)`}>
         <DataTable
-          headers={['Region', 'Avg HPPD', 'Avg PPD $']}
-          rows={regionData.map(r => [r.region, r.hppd ? fmt2(r.hppd) : '—', r.ppd ? fmt$(r.ppd) : '—'])}
-          onRowClick={i => updateFilters({ region: regionData[i].region })}
+          headers={['Facility', 'Acq Group', 'Region', 'Avg HPPD', 'Avg DC PPD $', 'Avg Overall PPD $']}
+          rows={facHppd.slice(0, 150).map(r => [
+            r.fac, r.sg, r.region,
+            r.hppd ? fmt2(r.hppd) : '—',
+            r.dcPpd ? fmt$(r.dcPpd) : '—',
+            r.olPpd ? <span className="font-bold text-indigo-700">{fmt$(r.olPpd)}</span> : '—'
+          ])}
+          onRowClick={i => updateFilter('facility', facHppd[i].fac)}
+        />
+      </SectionCard>
+
+      <SectionCard title="HPPD & PPD by Region">
+        <DataTable
+          headers={['Region', 'Avg HPPD', 'Avg Overall PPD $']}
+          rows={regionData.map(r => [r.region, r.hppd ? fmt2(r.hppd) : '—', r.olPpd ? fmt$(r.olPpd) : '—'])}
+          onRowClick={i => updateFilter('region', regionData[i].region)}
         />
       </SectionCard>
     </div>

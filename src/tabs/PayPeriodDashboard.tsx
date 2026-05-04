@@ -1,36 +1,61 @@
 import React from 'react';
 import { useData } from '../context/DataContext';
-import { SectionCard, DataTable, fmt$, fmt2, sumField, groupBy } from '../components/shared';
+import { SectionCard, DataTable, fmt$, fmtN, sumNum, groupBy } from '../components/shared';
 
 export default function PayPeriodDashboard() {
-  const { data, filteredMetrics, updateFilters } = useData();
-  const byPeriod = groupBy(filteredMetrics, m => m.payPeriod);
-  const selectedPeriod = data.filters.payPeriod;
+  const { data, filteredOT, filteredBonus, filteredPPD, filters, updateFilter } = useData();
+  if (!data) return null;
 
-  const periodSummary = data.payPeriods.map(p => {
-    const rows = byPeriod[p] || [];
+  const selectedPeriod = filters.payPeriod;
+
+  const periodData = data.payPeriods.map(p => {
+    const otRows = filteredOT.filter(r => r.payPeriod === p);
+    const bonusRows = filteredBonus.filter(r => r.payPeriod === p);
+    const ppdRows = filteredPPD.filter(r => r.payPeriod === p);
+    const facilities = new Set([...otRows.map(r => r.facility), ...bonusRows.map(r => r.facility), ...ppdRows.map(r => r.facility)]);
+    
     return {
-      p, facilities: [...new Set(rows.map(r => r.facility))].length,
-      ot: sumField(rows, 'otDollars'), bonus: sumField(rows, 'bonusDollars'), rows
+      p,
+      facilities: facilities.size,
+      ot: sumNum(otRows, 'otDollars'),
+      hrs: sumNum(otRows, 'otHours'),
+      bonus: sumNum(bonusRows, 'bonusDollars')
     };
-  }).filter(x => x.rows.length > 0);
+  }).filter(r => r.ot > 0 || r.bonus > 0 || r.facilities > 0).sort((a, b) => a.p.localeCompare(b.p));
 
   return (
-    <div className="p-8 space-y-6">
-      <SectionCard title={`Pay Period Overview (${periodSummary.length} periods)`}>
+    <div className="p-6 space-y-6">
+      <SectionCard title={`Pay Period Overview — ${periodData.length} Periods with Activity`}>
         <DataTable
-          headers={['Pay Period', 'Facilities', 'OT $', 'Bonus $']}
-          rows={periodSummary.map(r => [r.p, r.facilities, fmt$(r.ot), fmt$(r.bonus)])}
-          onRowClick={i => updateFilters({ payPeriod: periodSummary[i].p })}
+          headers={['Pay Period', 'Facilities Active', 'OT $', 'OT Hrs', 'Bonus $']}
+          rows={periodData.map(r => [
+            r.p, r.facilities,
+            <span className="font-bold text-red-700">{fmt$(r.ot)}</span>,
+            fmtN(Math.round(r.hrs)),
+            <span className="font-bold text-amber-700">{fmt$(r.bonus)}</span>
+          ])}
+          onRowClick={i => updateFilter('payPeriod', periodData[i].p)}
         />
-        <div className="px-5 py-2 text-[10px] text-slate-400 font-bold">Click a row to filter to that period</div>
+        <div className="px-5 py-2 text-[9px] text-slate-400 font-bold">Click a period to filter all tabs</div>
       </SectionCard>
 
       {selectedPeriod && (
-        <SectionCard title={`Facilities in ${selectedPeriod}`}>
+        <SectionCard title={`Facility Detail for ${selectedPeriod}`}>
           <DataTable
-            headers={['Facility', 'Region', 'OT $', 'Bonus $']}
-            rows={filteredMetrics.map(m => [m.facility, m.region || '—', fmt$(m.otDollars), fmt$(m.bonusDollars)])}
+            headers={['Facility', 'Acq Group', 'Region', 'Pay Cycle', 'OT $', 'OT Hrs', 'Bonus $']}
+            rows={data.facilities.map(f => {
+              const otR = filteredOT.filter(r => r.facility === f.name && r.payPeriod === selectedPeriod);
+              const bonusR = filteredBonus.filter(r => r.facility === f.name && r.payPeriod === selectedPeriod);
+              const ot = sumNum(otR, 'otDollars');
+              const hrs = sumNum(otR, 'otHours');
+              const bonus = sumNum(bonusR, 'bonusDollars');
+              if (ot === 0 && bonus === 0) return null;
+              return [f.name, f.subgroup, f.region, f.payCycle, fmt$(ot), fmtN(Math.round(hrs)), fmt$(bonus)];
+            }).filter(Boolean) as any[][]}
+            onRowClick={(i) => {
+              // Row click logic for filtered facilities array requires mapping back to original facility name.
+              // We'll skip click handler here for simplicity since the array is filtered above.
+            }}
           />
         </SectionCard>
       )}
