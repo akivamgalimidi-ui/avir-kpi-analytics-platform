@@ -1,227 +1,178 @@
 import React, { useState, useEffect } from 'react';
 import { api } from './services/api';
 import { 
-  LayoutDashboard, 
-  BarChart3, 
-  TrendingUp, 
-  MapPin, 
-  Globe, 
-  Users, 
-  Clock, 
-  DollarSign, 
-  ShieldCheck, 
-  Activity,
-  Download,
-  Settings,
-  AlertCircle,
-  Loader2,
-  FileText,
-  Filter,
-  CheckCircle2,
-  Table,
-  Database
+  Activity, 
+  Download, 
+  AlertCircle, 
+  Loader2, 
+  CheckCircle2, 
+  Database,
+  FileText
 } from 'lucide-react';
 
-const TABS = [
-  { id: 'executive', name: 'Executive Portfolio Dashboard', icon: LayoutDashboard, category: 'Executive' },
-  { id: 'kpi-period', name: 'KPI Dashboard by Period', icon: BarChart3, category: 'Executive' },
-  { id: 'portfolio-trends', name: 'Portfolio Facility Trends', icon: TrendingUp, category: 'Drilldowns' },
-  { id: 'facility', name: 'Facility Drilldown', icon: MapPin, category: 'Drilldowns' },
-  { id: 'region', name: 'Region Dashboard', icon: Globe, category: 'Drilldowns' },
-  { id: 'acq-group', name: 'Acq Group Dashboard', icon: Users, category: 'Drilldowns' },
-  { id: 'pay-period', name: 'Pay Period Dashboard', icon: Clock, category: 'Drilldowns' },
-  { id: 'ot', name: 'OT Analysis', icon: Clock, category: 'Analytics' },
-  { id: 'bonus', name: 'Bonus Analysis', icon: DollarSign, category: 'Analytics' },
-  { id: 'hppd-ppd', name: 'HPPD / PPD Analysis', icon: Activity, category: 'Analytics' },
-  { id: 'labor-pressure', name: 'Labor Pressure Ranking', icon: ShieldCheck, category: 'Analytics' },
-  { id: 'employee', name: 'Employee Review', icon: Users, category: 'Analytics' },
-  { id: 'pay-cycle', name: 'Pay Cycle Mapping', icon: Settings, category: 'System & QA' },
-  { id: 'data-quality', name: 'Data Quality Dashboard', icon: ShieldCheck, category: 'System & QA' },
-  { id: 'reconciliation', name: 'QA / Reconciliation', icon: ShieldCheck, category: 'System & QA' },
-  { id: 'system', name: 'System Status', icon: Activity, category: 'System & QA' },
-];
-
 function App() {
-  const [activeTab, setActiveTab] = useState('executive');
   const [loading, setLoading] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState<string>('');
+  const [status, setStatus] = useState<string>('Ready');
   const [error, setError] = useState<string | null>(null);
-  const [uploadResult, setUploadResult] = useState<any>(null);
-  const [filters, setFilters] = useState<any>(null);
+  const [result, setResult] = useState<any>(null);
 
-  // Load last result from storage on mount (Diagnostic)
+  // Auto-clear success after 10 seconds
   useEffect(() => {
-    const saved = localStorage.getItem('last_upload_result');
-    const savedErr = localStorage.getItem('last_upload_error');
-    if (saved) setUploadResult(JSON.parse(saved));
-    if (savedErr) setError(savedErr);
-    refreshData();
-  }, []);
-
-  const refreshData = async () => {
-    try {
-      const filterData = await api.filters();
-      setFilters(filterData);
-    } catch (err) {
-      console.warn("Filters failed to load", err);
+    if (result) {
+      const timer = setTimeout(() => {
+        // We keep it for now for diagnostics
+      }, 10000);
+      return () => clearTimeout(timer);
     }
-  };
+  }, [result]);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.length) return;
-    
+    const file = e.target.files?.[0];
+    if (!file) return;
+
     setLoading(true);
     setError(null);
-    setUploadStatus('Reading file bytes...');
+    setResult(null);
+    setStatus(`Preparing ${file.name}...`);
 
     try {
-      const file = e.target.files[0];
-      setUploadStatus(`Sending ${file.name} to Vercel...`);
+      setStatus(`Uploading ${file.size.toLocaleString()} bytes to /api/upload...`);
       
-      const result = await api.uploadPayroll(file);
+      const data = await api.uploadPayroll(file);
       
-      setUploadStatus('Processing result...');
-      setUploadResult(result);
-      localStorage.setItem('last_upload_result', JSON.stringify(result));
-      localStorage.removeItem('last_upload_error');
-      
-      await refreshData();
-      setActiveTab('data-quality');
+      setStatus('Success! Workbook metadata retrieved.');
+      setResult(data);
     } catch (err: any) {
-      const errMsg = err.message || String(err);
-      setError(errMsg);
-      localStorage.setItem('last_upload_error', errMsg);
+      console.error("Upload Error:", err);
+      setError(err.message || String(err));
+      setStatus('Failed');
     } finally {
       setLoading(false);
-      setUploadStatus('');
     }
-  };
-
-  const renderContent = () => {
-    if (loading) {
-      return (
-        <div className="p-12 flex flex-col items-center justify-center text-center h-[70vh]">
-          <Loader2 size={48} className="text-blue-600 animate-spin mb-6" />
-          <h3 className="text-2xl font-black text-slate-800 mb-2">{uploadStatus}</h3>
-          <p className="text-slate-500 max-w-sm">Please do not refresh the page. We are awaiting the server handshake.</p>
-        </div>
-      );
-    }
-
-    if (error) {
-      return (
-        <div className="p-8 mx-auto max-w-4xl">
-          <div className="bg-red-50 border border-red-100 p-8 rounded-3xl flex gap-6 text-red-700 shadow-sm">
-            <AlertCircle size={32} className="shrink-0" />
-            <div className="flex-1">
-              <p className="font-black text-xl mb-2">Upload Failed</p>
-              <div className="p-4 bg-white/50 rounded-xl font-mono text-xs break-all border border-red-200">
-                {error}
-              </div>
-              <button 
-                onClick={() => { setError(null); localStorage.removeItem('last_upload_error'); }} 
-                className="mt-6 px-6 py-2 bg-red-600 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-red-700 transition"
-              >
-                Clear Error
-              </button>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    if (uploadResult) {
-      return (
-        <div className="p-8 space-y-6">
-           <div className="bg-emerald-50 border border-emerald-100 p-6 rounded-2xl flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <CheckCircle2 size={24} className="text-emerald-500" />
-                <div>
-                  <h3 className="font-black text-emerald-900">Success: {uploadResult.message || 'File Processed'}</h3>
-                  <p className="text-sm text-emerald-700">Size: {uploadResult.fileSize} bytes | Sheets: {uploadResult.sheetsDetected?.length}</p>
-                </div>
-              </div>
-              <button onClick={() => { setUploadResult(null); localStorage.removeItem('last_upload_result'); }} className="text-xs font-bold text-emerald-700 underline">Clear Result</button>
-           </div>
-           
-           <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold">Workbook Sheets</div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2 p-6">
-                {uploadResult.sheetsDetected?.map((s: string) => (
-                  <div key={s} className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl border border-slate-100 text-sm font-bold text-slate-700">
-                    <Table size={16} className="text-blue-500" /> {s}
-                  </div>
-                ))}
-              </div>
-           </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="p-20 flex flex-col items-center justify-center text-center">
-        <div className="w-20 h-20 bg-slate-100 rounded-full flex items-center justify-center mb-8">
-          <FileText size={40} className="text-slate-300" />
-        </div>
-        <h3 className="text-2xl font-black text-slate-800 mb-2">Ready for Payroll Ingestion</h3>
-        <p className="text-slate-500 max-w-sm mb-12 font-medium">Please upload the 'Payroll Analysis Updated.xlsx' file to begin the analytical process.</p>
-        
-        <label 
-          tabIndex={0}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.currentTarget.click(); }}
-          className="px-10 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest hover:bg-blue-700 transition shadow-xl shadow-blue-500/20 cursor-pointer flex items-center gap-3 focus:outline-none focus:ring-4 focus:ring-blue-200"
-        >
-           <Download size={20} />
-           Upload Payroll Excel
-           <input type="file" className="hidden" accept=".xlsx,.xls" onChange={handleUpload} />
-        </label>
-      </div>
-    );
   };
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
-      <aside className="w-72 bg-slate-900 text-slate-400 flex flex-col shrink-0 shadow-2xl z-20 relative">
-        <div className="p-10">
-          <h1 className="text-white text-xl font-black tracking-tight flex items-center gap-2">
-            <Activity className="text-blue-500" /> Avir Analytics
-          </h1>
+    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-blue-100">
+      {/* Persistent Status Bar */}
+      <div className="bg-slate-900 text-white px-8 py-3 flex items-center justify-between shadow-2xl">
+        <div className="flex items-center gap-3">
+          <Activity className="text-blue-500 animate-pulse" size={20} />
+          <h1 className="font-black tracking-tight text-lg">AVIR ANALYTICS</h1>
         </div>
-        <nav className="flex-1 overflow-y-auto px-4 pb-12 space-y-2 custom-scrollbar">
-          {TABS.map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-2xl text-sm font-bold transition-all ${
-                activeTab === tab.id ? 'bg-blue-600 text-white shadow-xl shadow-blue-900/60' : 'hover:bg-slate-800 hover:text-slate-200'
+        <div className="flex items-center gap-6">
+          <div className={`px-4 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
+            loading ? 'bg-blue-600 animate-pulse' : error ? 'bg-red-600' : 'bg-emerald-600'
+          }`}>
+            {loading ? 'Processing' : error ? 'System Error' : 'System Online'}
+          </div>
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+            Status: <span className="text-white ml-2">{status}</span>
+          </div>
+        </div>
+      </div>
+
+      <main className="max-w-5xl mx-auto p-12">
+        {/* Error State */}
+        {error && (
+          <div className="bg-red-50 border-2 border-red-100 p-8 rounded-[40px] shadow-xl mb-12 animate-in slide-in-from-top duration-500">
+            <div className="flex gap-6 text-red-700">
+              <AlertCircle size={48} className="shrink-0" />
+              <div className="space-y-4">
+                <h3 className="text-2xl font-black tracking-tight">Backend Handshake Failed</h3>
+                <div className="p-6 bg-white/80 rounded-3xl font-mono text-xs leading-relaxed border border-red-100 shadow-inner overflow-auto max-h-60">
+                  {error}
+                </div>
+                <button 
+                  onClick={() => setError(null)}
+                  className="bg-red-600 text-white px-8 py-3 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-red-700 transition active:scale-95"
+                >
+                  Clear & Try Again
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Success State */}
+        {result && (
+          <div className="bg-emerald-50 border-2 border-emerald-100 p-8 rounded-[40px] shadow-xl mb-12 animate-in slide-in-from-top duration-500">
+            <div className="flex gap-6 text-emerald-700">
+              <CheckCircle2 size={48} className="shrink-0" />
+              <div className="space-y-4 w-full">
+                <h3 className="text-2xl font-black tracking-tight">Upload Successful</h3>
+                <p className="font-bold opacity-80 uppercase text-[10px] tracking-widest">Workbook Metadata Captured</p>
+                
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                   <div className="bg-white p-6 rounded-3xl border border-emerald-100">
+                      <div className="text-[10px] font-black text-slate-400 uppercase mb-2">Sheets Detected</div>
+                      <div className="flex flex-wrap gap-2">
+                        {result.sheetsDetected?.map((s: string) => (
+                          <span key={s} className="px-3 py-1 bg-emerald-100 text-emerald-700 rounded-lg text-[10px] font-bold">{s}</span>
+                        ))}
+                      </div>
+                   </div>
+                   <div className="bg-white p-6 rounded-3xl border border-emerald-100">
+                      <div className="text-[10px] font-black text-slate-400 uppercase mb-2">Payload Data</div>
+                      <div className="text-lg font-black text-slate-800">{result.fileSize?.toLocaleString()} Bytes</div>
+                      <div className="text-[10px] font-bold text-slate-400">{result.filename}</div>
+                   </div>
+                </div>
+
+                <button 
+                  onClick={() => setResult(null)}
+                  className="bg-emerald-600 text-white px-8 py-3 rounded-2xl font-black uppercase tracking-widest text-xs hover:bg-emerald-700 transition active:scale-95"
+                >
+                  Process New File
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Ready State */}
+        {!error && !result && (
+          <div className="flex flex-col items-center justify-center text-center py-20">
+            <div className="w-24 h-24 bg-blue-100 rounded-[40px] flex items-center justify-center mb-10 shadow-inner">
+              <FileText size={48} className="text-blue-600" />
+            </div>
+            <h2 className="text-4xl font-black text-slate-800 tracking-tight mb-4">Awaiting Payroll Data</h2>
+            <p className="text-slate-500 max-w-md mb-12 text-lg font-medium leading-relaxed">
+              Please upload the <strong>Payroll Analysis Updated.xlsx</strong> file to synchronize the analytical dashboards.
+            </p>
+
+            <label 
+              className={`relative group px-12 py-5 rounded-[30px] font-black uppercase tracking-widest text-sm transition-all shadow-2xl flex items-center gap-4 cursor-pointer overflow-hidden ${
+                loading ? 'bg-slate-100 text-slate-400' : 'bg-blue-600 text-white hover:bg-blue-700 hover:scale-105 active:scale-95 shadow-blue-500/30'
               }`}
             >
-              <tab.icon size={18} />
-              {tab.name}
-            </button>
-          ))}
-        </nav>
-      </aside>
+               {loading ? <Loader2 size={24} className="animate-spin" /> : <Download size={24} />}
+               {loading ? 'Sending to Vercel...' : 'Synchronize Payroll'}
+               <input 
+                 type="file" 
+                 className="absolute inset-0 opacity-0 cursor-pointer" 
+                 onChange={handleUpload} 
+                 disabled={loading}
+                 accept=".xlsx,.xls"
+               />
+            </label>
 
-      <main className="flex-1 flex flex-col overflow-hidden relative">
-        <header className="h-20 bg-white border-b border-slate-200 px-10 flex items-center justify-between shrink-0 z-10 shadow-sm">
-          <h2 className="text-xl font-black text-slate-800 tracking-tight">{TABS.find(t => t.id === activeTab)?.name}</h2>
-          <div className="flex items-center gap-4">
-             {loading && <span className="text-[10px] font-black text-blue-600 animate-pulse uppercase tracking-widest">Server Processing...</span>}
-             <div className="hidden md:flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold text-slate-600">
-                <Database size={14} /> System Online
-             </div>
+            {loading && (
+              <div className="mt-8 flex items-center gap-2 text-blue-600 font-black text-[10px] uppercase tracking-widest">
+                 <div className="w-2 h-2 bg-blue-600 rounded-full animate-ping" />
+                 DO NOT REFRESH PAGE
+              </div>
+            )}
           </div>
-        </header>
-        <section className="flex-1 overflow-auto custom-scrollbar relative">
-          {renderContent()}
-        </section>
+        )}
       </main>
+
+      <footer className="fixed bottom-0 left-0 right-0 p-8 flex justify-center pointer-events-none">
+        <div className="bg-white/80 backdrop-blur-xl border border-slate-200 px-6 py-2 rounded-full shadow-lg text-[9px] font-black text-slate-400 uppercase tracking-[0.2em]">
+           Avir Analytics Platform • v1.0.0-Stable
+        </div>
+      </footer>
     </div>
   );
 }
-
-// Minimal icons used but imported above
-const CheckCircle2 = ({ size, className }: any) => <Activity size={size} className={className} />;
 
 export default App;
