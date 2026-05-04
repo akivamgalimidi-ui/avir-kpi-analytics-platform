@@ -115,8 +115,15 @@ function App() {
             <AlertCircle size={32} className="shrink-0" />
             <div>
               <p className="font-black text-xl mb-2">System Interruption</p>
-              <p className="text-sm font-medium opacity-80 leading-relaxed">{error}</p>
-              <button onClick={() => setError(null)} className="mt-6 px-6 py-2 bg-red-600 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-red-700 transition">Reset Dashboard</button>
+              <div className="text-sm font-medium opacity-80 leading-relaxed space-y-2">
+                <p>{error}</p>
+                {uploadResult?.details && (
+                  <pre className="mt-4 p-4 bg-red-100/50 rounded-xl text-[10px] font-mono overflow-auto max-h-40">
+                    {uploadResult.details}
+                  </pre>
+                )}
+              </div>
+              <button onClick={() => { setError(null); setUploadResult(null); }} className="mt-6 px-6 py-2 bg-red-600 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-red-700 transition">Reset Dashboard</button>
             </div>
           </div>
         </div>
