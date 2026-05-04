@@ -6,10 +6,7 @@
       "destination": "/api/index.py"
     },
     {
-      "handle": "filesystem"
-    },
-    {
-      "source": "/(.*)",
+      "source": "/((?!assets/|vite.svg|favicon.ico).*)",
       "destination": "/index.html"
     }
   ]
