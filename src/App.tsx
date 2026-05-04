@@ -18,8 +18,8 @@ import {
   Search,
   Filter,
   CheckCircle2,
-  Database,
-  History
+  Table,
+  Database
 } from 'lucide-react';
 
 const TABS = [
@@ -46,28 +46,21 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploadResult, setUploadResult] = useState<any>(null);
-  const [filters, setFilters] = useState<any>(null);
   const [systemStatus, setSystemStatus] = useState<any>({ api: 'checking...', db: 'checking...', frontend: 'PASS', css: 'PASS' });
 
   useEffect(() => {
-    refreshData();
+    checkHealth();
   }, []);
 
-  const refreshData = async () => {
+  const checkHealth = async () => {
     try {
-      const [health, filterData] = await Promise.all([
-        api.health(),
-        api.filters()
-      ]);
-      
+      const result = await api.health();
       setSystemStatus((prev: any) => ({ 
         ...prev, 
         api: 'PASS', 
-        db: health.supabaseUrlConfigured ? 'PASS' : 'WARNING',
+        db: result.supabaseUrlConfigured ? 'PASS' : 'WARNING',
         error: null
       }));
-      
-      setFilters(filterData);
     } catch (err: any) {
       setSystemStatus((prev: any) => ({ ...prev, api: 'FAIL', db: 'FAIL', error: err.message }));
     }
@@ -82,7 +75,6 @@ function App() {
       const file = e.target.files[0];
       const result = await api.uploadPayroll(file);
       setUploadResult(result);
-      await refreshData(); // Immediately refresh dimensions from the DB
       setActiveTab('data-quality');
     } catch (err: any) {
       setError(err.message);
@@ -101,14 +93,14 @@ function App() {
                 <Activity size={18} className="text-blue-500" />
                 System Health Status
               </h3>
-              <button onClick={refreshData} className="text-sm text-blue-600 font-semibold hover:underline">Refresh</button>
+              <button onClick={checkHealth} className="text-sm text-blue-600 font-semibold hover:underline">Refresh</button>
             </div>
             <div className="p-8">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {[
                   { name: 'Frontend Mounted', status: systemStatus.frontend, desc: 'React Application Status' },
                   { name: 'CSS / Tailwind', status: systemStatus.css, desc: 'Style Injection Status' },
-                  { name: 'API Health ( /api/health )', status: systemStatus.api, desc: 'Serverless Function Connectivity' },
+                  { name: 'API Health ( Node.js )', status: systemStatus.api, desc: 'Serverless Function Connectivity' },
                   { name: 'Supabase Configured', status: systemStatus.db, desc: 'Backend Environment Status' },
                 ].map((item) => (
                   <div key={item.name} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
@@ -132,12 +124,12 @@ function App() {
     if (error) {
       return (
         <div className="p-8 mx-auto max-w-4xl">
-          <div className="bg-red-50 border border-red-100 p-6 rounded-2xl flex gap-4 text-red-700">
+          <div className="bg-red-50 border border-red-100 p-6 rounded-2xl flex gap-4 text-red-700 shadow-sm border-red-200">
             <AlertCircle size={24} className="shrink-0" />
             <div>
-              <p className="font-bold mb-1">Application Error</p>
+              <p className="font-bold mb-1 text-red-800">Application Error</p>
               <p className="text-sm font-mono opacity-80 break-all">{error}</p>
-              <button onClick={() => setError(null)} className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg text-xs font-bold">Clear Error</button>
+              <button onClick={() => setError(null)} className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg text-xs font-bold hover:bg-red-700 transition">Clear Error</button>
             </div>
           </div>
         </div>
@@ -148,70 +140,78 @@ function App() {
       return (
         <div className="p-12 flex flex-col items-center justify-center text-center h-[70vh]">
           <div className="w-16 h-16 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin"></div>
-          <h3 className="text-2xl font-bold text-slate-800 mt-8 mb-2">Parsing Workbook</h3>
-          <p className="text-slate-500 max-w-sm">Normalizing Excel sheets and persisting to Supabase...</p>
+          <h3 className="text-2xl font-bold text-slate-800 mt-8 mb-2">Processing Payroll</h3>
+          <p className="text-slate-500 max-w-sm">Parsing workbook structure and validating metadata...</p>
         </div>
       );
     }
 
     if (activeTab === 'data-quality' && uploadResult) {
       return (
-        <div className="p-8 max-w-5xl mx-auto space-y-6">
-           <div className="bg-emerald-50 border border-emerald-100 p-6 rounded-2xl flex items-center justify-between">
+        <div className="p-8 max-w-5xl mx-auto space-y-6 animate-in fade-in duration-500">
+           <div className="bg-emerald-50 border border-emerald-100 p-6 rounded-2xl flex items-center justify-between shadow-sm">
               <div className="flex items-center gap-4">
-                <div className="bg-emerald-500 text-white p-2 rounded-lg"><CheckCircle2 size={24} /></div>
+                <div className="bg-emerald-500 text-white p-2 rounded-lg shadow-md shadow-emerald-200"><CheckCircle2 size={24} /></div>
                 <div>
-                  <h3 className="font-black text-emerald-900">Upload Processed Successfully</h3>
-                  <p className="text-sm text-emerald-700">Batch ID: {uploadResult.uploadBatchId}</p>
+                  <h3 className="font-black text-emerald-900">Upload Processed (Node.js API)</h3>
+                  <p className="text-sm text-emerald-700">Workbook: {uploadResult.filename}</p>
                 </div>
               </div>
               <div className="text-right">
-                <div className="text-xs font-bold text-emerald-600 uppercase tracking-widest">Database Status</div>
-                <div className="font-black text-emerald-900">{uploadResult.databaseStatus}</div>
+                <div className="text-xs font-bold text-emerald-600 uppercase tracking-widest">Parser Status</div>
+                <div className="font-black text-emerald-900">{uploadResult.parserStatus}</div>
               </div>
            </div>
 
-           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Sheets Detected</div>
-                <div className="text-3xl font-black text-slate-900">{uploadResult.sheetsDetected?.length || 0}</div>
-              </div>
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Facilities Found</div>
-                <div className="text-3xl font-black text-slate-900">{uploadResult.facilitiesDetected?.length || 0}</div>
-              </div>
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <div className="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Parser Status</div>
-                <div className="text-sm font-black text-blue-600">{uploadResult.parserStatus}</div>
-              </div>
+           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+              {[
+                { label: 'File Size', val: `${(uploadResult.fileSize / 1024).toFixed(1)} KB`, icon: Database },
+                { label: 'Sheets', val: uploadResult.sheetsDetected?.length || 0, icon: Table },
+                { label: 'Parsed', val: uploadResult.workbookParsed ? 'YES' : 'NO', icon: CheckCircle2 },
+                { label: 'Status', val: '200 OK', icon: Activity },
+              ].map((stat, i) => (
+                <div key={i} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{stat.label}</div>
+                    <stat.icon size={14} className="text-slate-300" />
+                  </div>
+                  <div className="text-2xl font-black text-slate-800">{stat.val}</div>
+                </div>
+              ))}
            </div>
 
            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-              <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700">Workbook Structure</div>
-              <div className="p-0">
-                <table className="w-full text-sm">
-                  <thead className="bg-slate-50/50 text-slate-500 text-left">
-                    <tr>
-                      <th className="px-6 py-3 font-black uppercase text-[10px] tracking-widest">Sheet Name</th>
-                      <th className="px-6 py-3 font-black uppercase text-[10px] tracking-widest text-right">Row Count</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {Object.entries(uploadResult.sheetRowCounts || {}).map(([name, count]: [any, any]) => (
-                      <tr key={name} className="hover:bg-slate-50/50 transition">
-                        <td className="px-6 py-4 font-bold text-slate-700">{name}</td>
-                        <td className="px-6 py-4 text-right font-mono text-slate-500">{count}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="p-4 bg-slate-50 border-b border-slate-100 font-bold text-slate-700 flex items-center justify-between">
+                 <span>Workbook Structure Detection</span>
+                 <span className="text-[10px] text-slate-400 font-black uppercase tracking-widest">Validated via SheetJS</span>
               </div>
+              <table className="w-full text-sm text-left">
+                <thead className="bg-slate-50/50 text-slate-500">
+                  <tr>
+                    <th className="px-6 py-3 font-black uppercase text-[10px] tracking-widest">Sheet Name</th>
+                    <th className="px-6 py-3 font-black uppercase text-[10px] tracking-widest text-right">Rows</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {Object.entries(uploadResult.sheetRowCounts || {}).map(([name, count]: [any, any]) => (
+                    <tr key={name} className="hover:bg-slate-50/50 transition cursor-default">
+                      <td className="px-6 py-4 font-bold text-slate-700">{name}</td>
+                      <td className="px-6 py-4 text-right font-mono text-slate-400">{count}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+           </div>
+
+           <div className="bg-blue-50 border border-blue-100 p-6 rounded-2xl text-blue-800">
+              <h4 className="font-black text-blue-900 mb-1">Stability Foundation Verified</h4>
+              <p className="text-sm opacity-90">The Node.js upload bridge is now stable. Workbook metadata is correctly extracted. The next phase will implement Supabase persistence and the full KPI parser.</p>
            </div>
         </div>
       );
     }
 
-    if (!filters?.uploadBatches?.length && !uploadResult) {
+    if (!uploadResult) {
       return (
         <div className="p-20 flex flex-col items-center justify-center text-center opacity-60">
           <div className="w-20 h-20 bg-slate-200 rounded-full flex items-center justify-center mb-6">
@@ -229,19 +229,12 @@ function App() {
 
     return (
       <div className="p-8">
-        <div className="bg-white p-12 rounded-2xl border border-slate-200 text-center">
+        <div className="bg-white p-12 rounded-2xl border border-slate-200 text-center shadow-sm">
            <h3 className="text-xl font-bold text-slate-800 mb-2">{TABS.find(t => t.id === activeTab)?.name}</h3>
-           <div className="flex items-center justify-center gap-8 mt-8">
-              <div className="text-center">
-                <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Active Batch</div>
-                <div className="font-bold text-slate-700">{filters?.uploadBatches?.[0]?.filename || "Local Session"}</div>
-              </div>
-              <div className="text-center border-l border-slate-100 pl-8">
-                <div className="text-xs font-black text-slate-400 uppercase tracking-widest">Facilities</div>
-                <div className="font-bold text-slate-700">{filters?.facilities?.length || 0}</div>
-              </div>
+           <p className="text-slate-500 max-w-md mx-auto mb-8">Workbook uploaded and parsed. Basic workbook metadata is available. Full KPI parser/storage is the next step.</p>
+           <div className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 rounded-lg text-xs font-black uppercase tracking-widest border border-emerald-100">
+              <CheckCircle2 size={14} /> 200 OK - Workbook Metadata Ready
            </div>
-           <p className="text-slate-500 mt-12 max-w-md mx-auto">Workbook data is stored in Supabase. Dashboard modules are querying real dimensions from the database.</p>
         </div>
       </div>
     );
@@ -251,7 +244,7 @@ function App() {
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
-      <aside className="w-72 bg-slate-900 text-slate-400 flex flex-col shrink-0 shadow-xl z-20">
+      <aside className="w-72 bg-slate-900 text-slate-400 flex flex-col shrink-0 shadow-2xl z-20">
         <div className="p-8">
           <h1 className="text-white text-xl font-black tracking-tight flex items-center gap-2">
             <Activity className="text-blue-500" /> Avir Analytics
@@ -281,14 +274,11 @@ function App() {
       </aside>
 
       <main className="flex-1 flex flex-col overflow-hidden relative">
-        <header className="h-20 bg-white border-b border-slate-200 px-10 flex items-center justify-between shrink-0 z-10">
-          <div className="flex flex-col">
-            <h2 className="text-xl font-black text-slate-800 tracking-tight">{TABS.find(t => t.id === activeTab)?.name}</h2>
-            {filters?.facilities?.length > 0 && <span className="text-[10px] text-emerald-600 font-black uppercase tracking-widest flex items-center gap-1"><Database size={10}/> Data Loaded from Supabase</span>}
-          </div>
+        <header className="h-20 bg-white border-b border-slate-200 px-10 flex items-center justify-between shrink-0 z-10 shadow-sm">
+          <h2 className="text-xl font-black text-slate-800 tracking-tight">{TABS.find(t => t.id === activeTab)?.name}</h2>
           <div className="flex gap-4">
              <div className="hidden md:flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold text-slate-600 cursor-pointer hover:bg-slate-100 transition">
-                <Filter size={14} /> Global Filters ({filters?.facilities?.length || 0})
+                <Filter size={14} /> Global Filters
              </div>
              <label className={`px-6 py-2.5 rounded-xl text-sm font-black transition-all shadow-lg shadow-blue-900/10 flex items-center gap-2 cursor-pointer ${
                loading ? 'bg-slate-100 text-slate-400' : 'bg-blue-600 hover:bg-blue-700 text-white'
