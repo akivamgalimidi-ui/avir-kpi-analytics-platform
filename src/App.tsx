@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import * as XLSX from 'xlsx';
+import { api } from './services/api';
 import { 
   LayoutDashboard, 
   BarChart3, 
@@ -10,7 +10,6 @@ import {
   DollarSign, 
   ShieldCheck, 
   Activity,
-  History,
   Download,
   Settings,
   AlertCircle,
@@ -53,13 +52,11 @@ function App() {
 
   const checkHealth = async () => {
     try {
-      const res = await fetch('/api/health');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const result = await res.json();
+      const result = await api.health();
       setSystemStatus((prev: any) => ({ 
         ...prev, 
         api: 'PASS', 
-        db: result.database === 'connected' ? 'PASS' : 'WARNING',
+        db: result.supabaseUrlConfigured ? 'PASS' : 'WARNING',
         error: null
       }));
     } catch (err: any) {
@@ -74,29 +71,7 @@ function App() {
 
     try {
       const file = e.target.files[0];
-      const arrayBuffer = await file.arrayBuffer();
-      const workbook = XLSX.read(arrayBuffer, { type: 'array', cellDates: true });
-      
-      const sheetsData: Record<string, any> = {};
-      workbook.SheetNames.forEach(sn => {
-        sheetsData[sn] = XLSX.utils.sheet_to_json(workbook.Sheets[sn], { header: 1, defval: null });
-      });
-
-      const res = await fetch('/api/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename: file.name, sheets: sheetsData })
-      });
-
-      const contentType = res.headers.get("content-type") || "";
-      if (!contentType.includes("application/json")) {
-        const text = await res.text();
-        throw new Error(`Expected JSON but received ${contentType}. Status ${res.status}. Preview: ${text.substring(0, 100)}`);
-      }
-
-      const result = await res.json();
-      if (!res.ok || result.ok === false) throw new Error(result.error || result.details || 'Upload failed');
-      
+      const result = await api.uploadPayroll(file);
       setData(result.dashboard_data);
       setActiveTab('executive');
     } catch (err: any) {
@@ -121,10 +96,10 @@ function App() {
             <div className="p-8">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {[
-                  { name: 'Frontend Loaded', status: systemStatus.frontend, desc: 'React Application Status' },
+                  { name: 'Frontend Mounted', status: systemStatus.frontend, desc: 'React Application Status' },
                   { name: 'CSS / Tailwind', status: systemStatus.css, desc: 'Style Injection Status' },
                   { name: 'API Health ( /api/health )', status: systemStatus.api, desc: 'Serverless Function Connectivity' },
-                  { name: 'Supabase Database', status: systemStatus.db, desc: 'Backend Storage Connectivity' },
+                  { name: 'Supabase Configured', status: systemStatus.db, desc: 'Backend Environment Status' },
                 ].map((item) => (
                   <div key={item.name} className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
                     <div>
@@ -151,10 +126,20 @@ function App() {
             <AlertCircle size={24} className="shrink-0" />
             <div>
               <p className="font-bold mb-1">Application Error</p>
-              <p className="text-sm font-mono opacity-80">{error}</p>
+              <p className="text-sm font-mono opacity-80 break-all">{error}</p>
               <button onClick={() => setError(null)} className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg text-xs font-bold">Clear Error</button>
             </div>
           </div>
+        </div>
+      );
+    }
+
+    if (loading) {
+      return (
+        <div className="p-12 flex flex-col items-center justify-center text-center h-[70vh]">
+          <div className="w-16 h-16 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin"></div>
+          <h3 className="text-2xl font-bold text-slate-800 mt-8 mb-2">Uploading Payroll</h3>
+          <p className="text-slate-500 max-w-sm">Verifying API connectivity and upload stability...</p>
         </div>
       );
     }
@@ -179,7 +164,7 @@ function App() {
       <div className="p-8">
         <div className="bg-white p-12 rounded-2xl border border-slate-200 text-center">
            <h3 className="text-xl font-bold text-slate-800 mb-2">{TABS.find(t => t.id === activeTab)?.name} Ready</h3>
-           <p className="text-slate-500">Visualization modules are active and processing uploaded data.</p>
+           <p className="text-slate-500">Foundation is stable. Visualization modules will be connected to the parser engine next.</p>
         </div>
       </div>
     );
@@ -189,13 +174,13 @@ function App() {
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden font-sans">
-      <aside className="w-72 bg-slate-900 text-slate-400 flex flex-col shrink-0">
+      <aside className="w-72 bg-slate-900 text-slate-400 flex flex-col shrink-0 shadow-xl z-20">
         <div className="p-8">
           <h1 className="text-white text-xl font-black tracking-tight flex items-center gap-2">
             <Activity className="text-blue-500" /> Avir Analytics
           </h1>
         </div>
-        <nav className="flex-1 overflow-y-auto px-4 pb-8 space-y-6 scrollbar-hide">
+        <nav className="flex-1 overflow-y-auto px-4 pb-8 space-y-6 custom-scrollbar">
           {categories.map(cat => (
             <div key={cat}>
               <h3 className="px-4 text-[10px] uppercase tracking-widest font-black text-slate-600 mb-2">{cat}</h3>
@@ -218,11 +203,11 @@ function App() {
         </nav>
       </aside>
 
-      <main className="flex-1 flex flex-col overflow-hidden">
-        <header className="h-20 bg-white border-b border-slate-200 px-10 flex items-center justify-between shrink-0">
-          <h2 className="text-xl font-black text-slate-800">{TABS.find(t => t.id === activeTab)?.name}</h2>
+      <main className="flex-1 flex flex-col overflow-hidden relative">
+        <header className="h-20 bg-white border-b border-slate-200 px-10 flex items-center justify-between shrink-0 z-10">
+          <h2 className="text-xl font-black text-slate-800 tracking-tight">{TABS.find(t => t.id === activeTab)?.name}</h2>
           <div className="flex gap-4">
-             <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold text-slate-600">
+             <div className="hidden md:flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2 text-xs font-bold text-slate-600">
                 <Filter size={14} /> Global Filters
              </div>
              <label className={`px-6 py-2.5 rounded-xl text-sm font-black transition-all shadow-lg shadow-blue-900/10 flex items-center gap-2 cursor-pointer ${
@@ -234,7 +219,7 @@ function App() {
              </label>
           </div>
         </header>
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 overflow-auto custom-scrollbar relative">
           {renderContent()}
         </div>
       </main>
