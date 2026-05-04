@@ -63,7 +63,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
 
-  const hasData = !!data && data.facilities.length > 0;
+  const hasData = !!data;
   const ActiveTab = TAB_MAP[activeTab] || ExecutiveDashboard;
 
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
@@ -75,7 +75,9 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
+      console.log('Upload started for:', file.name);
       const result = await parseWorkbook(file);
+      console.log('Parse result:', result);
       setFromParseResult(result);
       setActiveTab('data-quality');
     } catch (err: any) {
