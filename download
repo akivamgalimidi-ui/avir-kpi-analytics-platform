@@ -1,0 +1,448 @@
+import * as XLSX from 'xlsx';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface Facility {
+  name: string;
+  normalized: string;
+  subgroup: string;
+  region: string;
+  payCycle: string;
+  latestPeriod: string;
+  priorPeriod: string;
+  comparableStatus: string;
+}
+
+export interface OTRow {
+  facility: string;
+  subgroup: string;
+  department: string;
+  position: string;
+  employee: string;
+  payPeriod: string;
+  otDollars: number;
+  otHours: number;
+}
+
+export interface BonusRow {
+  facility: string;
+  subgroup: string;
+  bonusType: string;
+  position: string;
+  employee: string;
+  payPeriod: string;
+  bonusDollars: number;
+}
+
+export interface PPDRow {
+  facility: string;
+  subgroup: string;
+  metricType: string;
+  payPeriod: string;
+  value: number;
+}
+
+export interface ParsedData {
+  filename: string;
+  fileSize: number;
+  parsedAt: string;
+  sheetsDetected: string[];
+  sheetRowCounts: Record<string, number>;
+  facilities: Facility[];
+  subgroups: string[];
+  regions: string[];
+  payPeriods: string[];
+  departments: string[];
+  positions: string[];
+  bonusTypes: string[];
+  otRows: OTRow[];
+  bonusRows: BonusRow[];
+  ppdRows: PPDRow[];
+  warnings: string[];
+  parserCoverage: Record<string, string>;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function norm(v: unknown): string {
+  return String(v ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function toNum(v: unknown): number {
+  if (v === null || v === undefined || v === '') return 0;
+  const n = parseFloat(String(v).replace(/[$,%]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
+function fmtDate(v: unknown): string {
+  if (!v) return '';
+  // Date object from xlsx cellDates:true
+  if (v instanceof Date) {
+    const m = String(v.getMonth() + 1).padStart(2, '0');
+    const d = String(v.getDate()).padStart(2, '0');
+    return `${m}/${d}/${v.getFullYear()}`;
+  }
+  const s = String(v).trim();
+  // Already MM/DD/YYYY
+  if (/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)) return s;
+  // Excel date serial number
+  const n = parseFloat(s);
+  if (!isNaN(n) && n > 40000 && n < 70000) {
+    const d = new Date(Math.round((n - 25569) * 86400000));
+    return `${String(d.getUTCMonth()+1).padStart(2,'0')}/${String(d.getUTCDate()).padStart(2,'0')}/${d.getUTCFullYear()}`;
+  }
+  // ISO-like string (e.g. "2026-03-28T00:00:00.000Z")
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    return `${String(d.getMonth()+1).padStart(2,'0')}/${String(d.getDate()).padStart(2,'0')}/${d.getFullYear()}`;
+  }
+  return s;
+}
+
+function fillDown(col: unknown[]): unknown[] {
+  let last: unknown = null;
+  return col.map(v => {
+    if (v !== null && v !== undefined && String(v).trim() !== '') last = v;
+    return last;
+  });
+}
+
+function getSheet(wb: XLSX.WorkBook, name: string): unknown[][] | null {
+  const ws = wb.Sheets[name];
+  if (!ws) return null;
+  return XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true }) as unknown[][];
+}
+
+function isSkip(v: unknown): boolean {
+  const s = norm(v);
+  return !s || s.includes('total') || s.includes('grand total') || s.includes('subtotal');
+}
+
+// ─── OT Parser ────────────────────────────────────────────────────────────────
+// LTC file structure (0-indexed):
+//   Row 0: empty
+//   Row 1: "OT by Pay Period"
+//   Row 2: section labels: col 6="OT Dollars ($)", col 10="OT Hours", col 14="OT % of Gross ($)", col 18="OT % of Worked Hours"
+//   Row 3: headers: 0=Subgroup Name, 1=Facility, 2=Department, 4=Position, 5=Employee Name, 6-9=OT$ dates, 10-13=OT Hrs dates
+//   Row 4+: data
+
+function parseOT(wb: XLSX.WorkBook, warnings: string[]): { rows: OTRow[]; periods: string[] } {
+  const data = getSheet(wb, 'OT by Pay Period');
+  if (!data) { warnings.push('Sheet "OT by Pay Period" not found'); return { rows: [], periods: [] }; }
+
+  const sectionRow = (data[2] || []) as unknown[];
+  const headerRow = (data[3] || []) as unknown[];
+
+  // Build section-aware date column map
+  const dollarCols: { col: number; period: string }[] = [];
+  const hourCols: { col: number; period: string }[] = [];
+
+  let section = 'dollars';
+  for (let c = 0; c < sectionRow.length; c++) {
+    const lbl = norm(sectionRow[c]);
+    if (lbl.includes('dollar') || (c === 6 && !lbl)) { /* stay dollars */ }
+    if (lbl.includes('dollar')) section = 'dollars';
+    else if (lbl.includes('hour') && !lbl.includes('percent') && !lbl.includes('pct') && !lbl.includes('%')) section = 'hours';
+    else if (lbl.includes('percent') || lbl.includes('%') || lbl.includes('gross') || lbl.includes('worked') || lbl.includes('total')) section = 'skip';
+
+    const h = headerRow[c];
+    const period = h ? fmtDate(h) : '';
+    if (!period || !period.match(/\d{2}\/\d{2}\/\d{4}/)) continue;
+
+    if (section === 'dollars') dollarCols.push({ col: c, period });
+    else if (section === 'hours') hourCols.push({ col: c, period });
+  }
+
+  // Positional fallback for known ltc structure (cols 6-9 = dollars, 10-13 = hours)
+  if (dollarCols.length === 0) {
+    for (let c = 6; c <= 9 && c < headerRow.length; c++) {
+      const p = fmtDate(headerRow[c]);
+      if (p && p.match(/\d{2}\/\d{2}\/\d{4}/)) dollarCols.push({ col: c, period: p });
+    }
+    for (let c = 10; c <= 13 && c < headerRow.length; c++) {
+      const p = fmtDate(headerRow[c]);
+      if (p && p.match(/\d{2}\/\d{2}\/\d{4}/)) hourCols.push({ col: c, period: p });
+    }
+  }
+
+  if (dollarCols.length === 0) {
+    warnings.push('OT by Pay Period: no date columns detected');
+    return { rows: [], periods: [] };
+  }
+
+  const allPeriods = [...new Set([...dollarCols.map(d => d.period), ...hourCols.map(d => d.period)])];
+
+  const dataRows = data.slice(4) as unknown[][];
+  const subsFD = fillDown(dataRows.map(r => (r as unknown[])?.[0]));
+  const facsFD = fillDown(dataRows.map(r => (r as unknown[])?.[1]));
+  const deptsFD = fillDown(dataRows.map(r => (r as unknown[])?.[2]));
+
+  const results: OTRow[] = [];
+
+  dataRows.forEach((rowRaw, i) => {
+    const row = rowRaw as unknown[];
+    const facility = String(facsFD[i] ?? '').trim();
+    const subgroup = String(subsFD[i] ?? '').trim();
+    const dept = String(deptsFD[i] ?? '').trim();
+    const position = String(row?.[4] ?? '').trim();
+    const employee = String(row?.[5] ?? '').trim();
+
+    if (isSkip(facility) || !employee) return;
+
+    const byPeriod: Record<string, { dollars: number; hours: number }> = {};
+
+    dollarCols.forEach(({ col, period }) => {
+      const v = toNum(row?.[col]);
+      if (!v) return;
+      if (!byPeriod[period]) byPeriod[period] = { dollars: 0, hours: 0 };
+      byPeriod[period].dollars += v;
+    });
+
+    hourCols.forEach(({ col, period }) => {
+      const v = toNum(row?.[col]);
+      if (!v) return;
+      if (!byPeriod[period]) byPeriod[period] = { dollars: 0, hours: 0 };
+      byPeriod[period].hours += v;
+    });
+
+    Object.entries(byPeriod).forEach(([period, vals]) => {
+      if (!vals.dollars && !vals.hours) return;
+      results.push({ employee, facility, subgroup, department: dept || 'Unassigned', position: position || 'Unassigned', payPeriod: period, otDollars: vals.dollars, otHours: vals.hours });
+    });
+  });
+
+  return { rows: results, periods: allPeriods };
+}
+
+// ─── Bonus Parser ─────────────────────────────────────────────────────────────
+// LTC file structure:
+//   Row 0: empty, Row 1: "Bonus by PPE"
+//   Row 2: Subgroup Name(0), Facility(1), Bonus Type(2), [blank](3), Position(4), Employee Name(5), dates(6+)
+//   Row 3+: data
+
+function parseBonus(wb: XLSX.WorkBook, warnings: string[]): BonusRow[] {
+  const data = getSheet(wb, 'Bonus by PPE');
+  if (!data) { warnings.push('Sheet "Bonus by PPE" not found'); return []; }
+
+  const headerRow = (data[2] || []) as unknown[];
+
+  // Find date columns (Date objects from xlsx)
+  const dateCols: { col: number; period: string }[] = [];
+  headerRow.forEach((h, c) => {
+    if (c < 5) return;
+    const p = fmtDate(h);
+    if (p && p.match(/\d{2}\/\d{2}\/\d{4}/)) dateCols.push({ col: c, period: p });
+  });
+
+  if (dateCols.length === 0) {
+    warnings.push('Bonus by PPE: no date columns detected');
+    return [];
+  }
+
+  const dataRows = data.slice(3) as unknown[][];
+  const subsFD = fillDown(dataRows.map(r => (r as unknown[])?.[0]));
+  const facsFD = fillDown(dataRows.map(r => (r as unknown[])?.[1]));
+  const typesFD = fillDown(dataRows.map(r => (r as unknown[])?.[2]));
+
+  const results: BonusRow[] = [];
+
+  dataRows.forEach((rowRaw, i) => {
+    const row = rowRaw as unknown[];
+    const facility = String(facsFD[i] ?? '').trim();
+    const subgroup = String(subsFD[i] ?? '').trim();
+    const bonusType = String(typesFD[i] ?? '').trim();
+    const position = String(row?.[4] ?? '').trim();
+    const employee = String(row?.[5] ?? '').trim();
+
+    if (isSkip(facility) || !employee) return;
+
+    dateCols.forEach(({ col, period }) => {
+      const v = toNum(row?.[col]);
+      if (!v) return;
+      results.push({ employee, facility, subgroup, bonusType: bonusType || 'Other', position: position || 'Unassigned', payPeriod: period, bonusDollars: v });
+    });
+  });
+
+  return results;
+}
+
+// ─── PPD Parser ───────────────────────────────────────────────────────────────
+// LTC file structure:
+//   Row 0: empty, Row 1: "PPDs", Row 2: empty
+//   Row 3: [blank](0), Subgroup Name(1), Facility(2), [blank](3), date cols (4+)
+//   Row 4+: data; col 0 = metric type (fills down), col 1 = subgroup (fills down), col 2 = facility (fills down)
+
+function parsePPD(wb: XLSX.WorkBook, warnings: string[]): PPDRow[] {
+  const data = getSheet(wb, 'PPDs');
+  if (!data) { warnings.push('Sheet "PPDs" not found'); return []; }
+
+  const headerRow = (data[3] || []) as unknown[];
+
+  const dateCols: { col: number; period: string }[] = [];
+  headerRow.forEach((h, c) => {
+    if (c < 4) return;
+    const p = fmtDate(h);
+    if (p && p.match(/\d{2}\/\d{2}\/\d{4}/)) dateCols.push({ col: c, period: p });
+  });
+
+  if (dateCols.length === 0) {
+    warnings.push('PPDs: no date columns detected');
+    return [];
+  }
+
+  const dataRows = data.slice(4) as unknown[][];
+  const metricsFD = fillDown(dataRows.map(r => (r as unknown[])?.[0]));
+  const subsFD = fillDown(dataRows.map(r => (r as unknown[])?.[1]));
+  const facsFD = fillDown(dataRows.map(r => (r as unknown[])?.[2]));
+
+  const results: PPDRow[] = [];
+
+  dataRows.forEach((rowRaw, i) => {
+    const row = rowRaw as unknown[];
+    const facility = String(facsFD[i] ?? '').trim();
+    const subgroup = String(subsFD[i] ?? '').trim();
+    const metricType = String(metricsFD[i] ?? '').trim();
+
+    if (isSkip(facility) || !metricType) return;
+
+    dateCols.forEach(({ col, period }) => {
+      const v = toNum(row?.[col]);
+      if (!v) return;
+      results.push({ facility, subgroup, metricType, payPeriod: period, value: v });
+    });
+  });
+
+  return results;
+}
+
+// ─── Facility Builder (from OT/Bonus/PPD facts — no "Pay Cycle Mapping" sheet in ltc) ───
+
+function buildFacilities(
+  otRows: OTRow[],
+  bonusRows: BonusRow[],
+  ppdRows: PPDRow[],
+  warnings: string[]
+): Facility[] {
+  // Collect facility → subgroup from facts
+  const facilitySubgroup = new Map<string, string>();
+  const facilityPeriods = new Map<string, Set<string>>();
+
+  const track = (facility: string, subgroup: string, period: string) => {
+    if (!facilitySubgroup.has(facility) && subgroup) facilitySubgroup.set(facility, subgroup);
+    if (!facilityPeriods.has(facility)) facilityPeriods.set(facility, new Set());
+    if (period) facilityPeriods.get(facility)!.add(period);
+  };
+
+  otRows.forEach(r => track(r.facility, r.subgroup, r.payPeriod));
+  bonusRows.forEach(r => track(r.facility, r.subgroup, r.payPeriod));
+  ppdRows.forEach(r => track(r.facility, r.subgroup, r.payPeriod));
+
+  const facilities: Facility[] = [];
+
+  facilitySubgroup.forEach((subgroup, facility) => {
+    if (!facility || isSkip(facility)) return;
+
+    const periods = [...(facilityPeriods.get(facility) || [])].sort();
+
+    // Cycle detection:
+    // Cycle A: data on 03/28 and/or 04/11
+    // Cycle B: data on 04/04 and/or 04/18
+    const hasA = periods.some(p => p.startsWith('03/28') || p.startsWith('04/11'));
+    const hasB = periods.some(p => p.startsWith('04/04') || p.startsWith('04/18'));
+
+    let payCycle = 'Unknown';
+    if (hasA && !hasB) payCycle = 'Cycle A';
+    else if (hasB && !hasA) payCycle = 'Cycle B';
+    else if (hasA) payCycle = 'Cycle A'; // mixed → prefer A
+
+    // Latest & prior within same cycle
+    const cycleADates = periods.filter(p => p.startsWith('03/28') || p.startsWith('04/11'));
+    const cycleBDates = periods.filter(p => p.startsWith('04/04') || p.startsWith('04/18'));
+    const cyclePeriods = payCycle === 'Cycle B' ? cycleBDates : cycleADates;
+
+    const latest = cyclePeriods[cyclePeriods.length - 1] || periods[periods.length - 1] || '';
+    const prior = cyclePeriods[cyclePeriods.length - 2] || '';
+    const comparableStatus = prior ? 'Comparable' : 'New';
+
+    facilities.push({
+      name: facility,
+      normalized: norm(facility),
+      subgroup,
+      region: 'Unassigned', // ltc file has no facility→region table; region shown in Analysis by Region but only as aggregated columns
+      payCycle,
+      latestPeriod: latest,
+      priorPeriod: prior,
+      comparableStatus,
+    });
+  });
+
+  // Enrich regions from Analysis by Region sheet (it has region names as column headers, not per-facility rows)
+  // Since the ltc file doesn't have a per-facility region mapping, we leave region as subgroup for now
+  // and note it in warnings
+  warnings.push('Region data: the ltc source file has regions only as column aggregates (not per-facility). Region shown as "Unassigned" — use the filter by Acq Group (Subgroup) instead.');
+
+  return facilities.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// ─── Main Export ──────────────────────────────────────────────────────────────
+
+export async function parseWorkbook(file: File): Promise<ParsedData> {
+  const buffer = await file.arrayBuffer();
+  // Use cellDates:true so Date objects come through directly
+  const wb = XLSX.read(buffer, { type: 'array', cellDates: true, raw: false });
+
+  const warnings: string[] = [];
+  const coverage: Record<string, string> = {};
+
+  const { rows: otRows, periods: otPeriods } = parseOT(wb, warnings);
+  coverage['OT by Pay Period'] = otRows.length > 0 ? `✅ ${otRows.length} rows` : '❌ 0 rows — check sheet name';
+
+  const bonusRows = parseBonus(wb, warnings);
+  coverage['Bonus by PPE'] = bonusRows.length > 0 ? `✅ ${bonusRows.length} rows` : '❌ 0 rows';
+
+  const ppdRows = parsePPD(wb, warnings);
+  coverage['PPDs'] = ppdRows.length > 0 ? `✅ ${ppdRows.length} rows` : '❌ 0 rows';
+
+  const facilities = buildFacilities(otRows, bonusRows, ppdRows, warnings);
+  coverage['Facility Mapping'] = facilities.length > 0 ? `✅ ${facilities.length} facilities (inferred from data)` : '❌ 0 facilities';
+
+  const subgroups = [...new Set(facilities.map(f => f.subgroup).filter(Boolean))].sort();
+  const regions = [...new Set(facilities.map(f => f.region).filter(r => r && r !== 'Unassigned'))].sort();
+
+  const allPeriods = [...new Set([
+    ...otPeriods,
+    ...bonusRows.map(r => r.payPeriod),
+    ...ppdRows.map(r => r.payPeriod),
+  ])].filter(Boolean).sort();
+
+  const departments = [...new Set(otRows.map(r => r.department).filter(Boolean))].sort();
+  const positions = [...new Set([...otRows.map(r => r.position), ...bonusRows.map(r => r.position)].filter(Boolean))].sort();
+  const bonusTypes = [...new Set(bonusRows.map(r => r.bonusType).filter(Boolean))].sort();
+
+  const sheets = wb.SheetNames;
+  const sheetRowCounts: Record<string, number> = {};
+  sheets.forEach(s => {
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[s], { header: 1 }) as unknown[][];
+    sheetRowCounts[s] = rows.length;
+  });
+
+  return {
+    filename: file.name,
+    fileSize: file.size,
+    parsedAt: new Date().toISOString(),
+    sheetsDetected: sheets,
+    sheetRowCounts,
+    facilities,
+    subgroups,
+    regions,
+    payPeriods: allPeriods,
+    departments,
+    positions,
+    bonusTypes,
+    otRows,
+    bonusRows,
+    ppdRows,
+    warnings,
+    parserCoverage: coverage,
+  };
+}

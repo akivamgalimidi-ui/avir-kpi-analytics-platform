@@ -1,0 +1,31 @@
+import React from 'react';
+import { useData } from '../context/DataContext';
+import { SectionCard, DataTable, fmt$, fmtN, fmt2, sumNum } from '../components/shared';
+
+export default function KpiByPeriod() {
+  const { data, filteredOT, filteredBonus, filteredPPD } = useData();
+  if (!data) return null;
+  const rows = data.payPeriods.map(period => {
+    const ot = filteredOT.filter(r => r.payPeriod === period);
+    const bonus = filteredBonus.filter(r => r.payPeriod === period);
+    const ppd = filteredPPD.filter(r => r.payPeriod === period);
+    const hppd = ppd.filter(r => r.metricType === 'Direct Care HPPD');
+    const olppd = ppd.filter(r => r.metricType.includes('Overall'));
+    const facs = new Set([...ot.map(r=>r.facility),...bonus.map(r=>r.facility),...ppd.map(r=>r.facility)]);
+    return [
+      period,
+      <span key={period+'ot'} className="font-bold text-red-700">{fmt$(sumNum(ot,'otDollars'))}</span>,
+      <span key={period+'bo'} className="font-bold text-amber-700">{fmt$(sumNum(bonus,'bonusDollars'))}</span>,
+      <span key={period+'hp'} className="text-blue-700">{hppd.length ? fmt2(sumNum(hppd,'value')/hppd.length) : '—'}</span>,
+      <span key={period+'pp'} className="text-indigo-700">{olppd.length ? fmt$(sumNum(olppd,'value')/olppd.length) : '—'}</span>,
+      fmtN(facs.size),
+    ];
+  });
+  return (
+    <div className="p-6">
+      <SectionCard title={`KPI Matrix — ${data.payPeriods.length} Pay Periods`} subtitle="OT, Bonus, HPPD, PPD per pay period">
+        <DataTable headers={['Pay Period','Total OT $','Total Bonus $','Avg HPPD','Avg PPD $','Active Facilities']} rows={rows} />
+      </SectionCard>
+    </div>
+  );
+}

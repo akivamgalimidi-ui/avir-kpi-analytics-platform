@@ -1,0 +1,53 @@
+import React from 'react';
+import {
+  LineChart, Line, BarChart, Bar, XAxis, YAxis,
+  CartesianGrid, Tooltip, ResponsiveContainer, Cell
+} from 'recharts';
+
+const Tip = ({ active, payload, label }: any) => {
+  if (!active || !payload?.length) return null;
+  const v = payload[0]?.value ?? 0;
+  const formatted = typeof v === 'number' && v > 100
+    ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(v)
+    : String(v);
+  return (
+    <div className="bg-slate-900 border border-slate-700 p-3 rounded-xl shadow-2xl text-xs">
+      <p className="text-slate-400 font-bold mb-1">{label}</p>
+      <p className="text-white font-black">{formatted}</p>
+    </div>
+  );
+};
+
+export function KpiLineChart({ data, xKey, yKey, name, color = '#2563eb' }: {
+  data: unknown[]; xKey: string; yKey: string; name: string; color?: string;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={data as any[]} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+        <XAxis dataKey={xKey} axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 700 }} dy={10} />
+        <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 700 }} tickFormatter={v => v >= 1000 ? `$${(v/1000).toFixed(0)}k` : String(v)} />
+        <Tooltip content={<Tip />} />
+        <Line type="monotone" dataKey={yKey} name={name} stroke={color} strokeWidth={3} dot={{ r: 4, strokeWidth: 2, fill: '#fff', stroke: color }} activeDot={{ r: 6 }} animationDuration={800} />
+      </LineChart>
+    </ResponsiveContainer>
+  );
+}
+
+export function KpiBarChart({ data, xKey, yKey, name, color = '#2563eb' }: {
+  data: unknown[]; xKey: string; yKey: string; name: string; color?: string;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <BarChart data={data as any[]} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+        <XAxis dataKey={xKey} axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 700 }} dy={10} />
+        <YAxis axisLine={false} tickLine={false} tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 700 }} tickFormatter={v => v >= 1000 ? `$${(v/1000).toFixed(0)}k` : String(v)} />
+        <Tooltip content={<Tip />} />
+        <Bar dataKey={yKey} name={name} fill={color} radius={[6, 6, 0, 0]} barSize={32} animationDuration={800}>
+          {(data as any[]).map((_: unknown, i: number) => <Cell key={i} fillOpacity={1 - i * 0.07} />)}
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
